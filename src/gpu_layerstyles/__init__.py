@@ -1,0 +1,19 @@
+"""Float32 color adjustment nodes for ComfyUI."""
+
+from comfy_api.latest import ComfyExtension, io
+
+from .color_correct_brightness_and_contrast import BrightnessContrastV2
+from .color_correct_color_balance import ColorBalance
+from .color_correct_color_temperature import ColorTemperature
+
+
+class GPULayerStylesExtension(ComfyExtension):
+    async def get_node_list(self) -> list[type[io.ComfyNode]]:
+        return [ColorBalance, BrightnessContrastV2, ColorTemperature]
+
+
+async def comfy_entrypoint() -> GPULayerStylesExtension:
+    return GPULayerStylesExtension()
+
+
+__all__ = ["GPULayerStylesExtension", "comfy_entrypoint"]

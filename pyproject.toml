@@ -1,0 +1,58 @@
+[project]
+name = "gpu-layerstyles"
+version = "0.1.0"
+description = "Batch-capable GPU layerstyle nodes for ComfyUI."
+readme = "README.md"
+authors = [
+    { name = "Lany Atwood", email = "lany@colorized.life" }
+]
+requires-python = ">=3.13"
+# ComfyUI supplies PyTorch and comfy_api; do not replace its CUDA build.
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "torch==2.14.0",
+    "numpy",
+    "pillow",
+    "scipy",
+    "pytest>=9,<10",
+    "ruff>=0.16.6",
+]
+
+[tool.uv]
+python-preference = "system"
+
+# CPU PyTorch is a development dependency only. Other packages use PyPI.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.build-backend]
+source-include = ["__init__.py", ".python-version", "AGENTS.md", "uv.lock", "tests/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--import-mode=importlib", "--confcutdir=tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.per-file-ignores]
+# ComfyUI loads the root entry point from the gpu-layerstyles directory.
+"./__init__.py" = ["N999"]
