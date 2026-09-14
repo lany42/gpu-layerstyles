@@ -46,9 +46,10 @@ adjustment controls.
   midtones, then highlights. Each curve evaluates
   `clamp(x + slider * maximum * x * (1-x) / (center * (1-center)), 0, 1)`, with
   `(center, maximum)` values `(0.15, 0.1)`, `(0.5, 1.0)`, and `(0.8, 0.2)`.
-  Luminosity is restored using weights `(0.2126, 0.7152, 0.0722)` and a minimum
-  adjusted luminance of `1e-6`, followed by clipping. Fully black adjusted pixels
-  remain black. All-zero sliders skip the curves and luminosity restoration.
+  The equivalent polynomial is evaluated to retain small positive values near
+  black. Luminosity is restored using weights `(0.2126, 0.7152, 0.0722)` and the
+  actual positive adjusted luminance, followed by clipping. Fully black adjusted
+  pixels remain black. All-zero sliders skip the curves and luminosity restoration.
 - **Brightness Contrast V2:** brightness, contrast, and saturation default to `1`,
   range from `0` to `3`, and step by `0.01`. Brightness multiplies RGB. Contrast is
   centered on each frame's mean grayscale luminance after brightness. Saturation
@@ -114,7 +115,8 @@ excluded from the wheel's runtime requirements; ComfyUI supplies its own PyTorch
 
 Tests compare dense ramps and extreme ColorBalance sliders against SciPy, and
 enhancements against float references and Pillow with quantization tolerance. They
-also cover neutral identity, clipping, zero/near-zero luminance, alpha, input
+also cover curve cancellation near black, restoration of tiny positive adjusted
+luminance, neutral identity, clipping, zero/near-zero luminance, alpha, input
 immutability, mixed-brightness batches, narrow/noncontiguous inputs, partial chunks,
 allocation retries, progress, cancellation, and loader/schema registration.
 

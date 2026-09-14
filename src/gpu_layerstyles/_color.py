@@ -23,9 +23,11 @@ def color_temperature(rgb: torch.Tensor, temperature: float) -> torch.Tensor:
 def _adjust_curve(
     rgb: torch.Tensor, sliders: torch.Tensor, center: float, maximum: float
 ) -> torch.Tensor:
-    return (rgb + sliders * maximum * rgb * (1 - rgb) / (center * (1 - center))).clamp_(
-        0, 1
-    )
+    # The three-point spline is x * (x + (1 + a) * (1 - x)), where
+    # a = slider * maximum / (center * (1 - center)). This form retains
+    # small x^2 terms when a is -1 instead of subtracting nearly equal values.
+    linear = 1 + sliders * (maximum / (center * (1 - center)))
+    return (rgb * (rgb + linear * (1 - rgb))).clamp_(0, 1)
 
 
 def color_balance(
@@ -38,8 +40,11 @@ def color_balance(
     sliders = rgb.new_tensor((cyan_red, magenta_green, yellow_blue))
     for center, maximum in ((0.15, 0.1), (0.5, 1.0), (0.8, 0.2)):
         rgb = _adjust_curve(rgb, sliders, center, maximum)
-    ratio = original_luminance / _luminance(rgb, weights).clamp_min_(1e-6)
-    return rgb.mul_(ratio).clamp_(0, 1)
+    adjusted_luminance = _luminance(rgb, weights)
+    # Protect only zero luminance; a floor would darken positive adjusted RGB.
+    # Normalize first to avoid an overflowing source/adjusted luminance ratio.
+    adjusted_luminance.masked_fill_(adjusted_luminance == 0, 1)
+    return rgb.div_(adjusted_luminance).mul_(original_luminance).clamp_(0, 1)
 
 
 def brightness_contrast(

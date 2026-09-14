@@ -1,6 +1,6 @@
 [project]
 name = "gpu-layerstyles"
-version = "0.1.0"
+version = "1.0.0"
 description = "Batch-capable GPU layerstyle nodes for ComfyUI."
 readme = "README.md"
 authors = [

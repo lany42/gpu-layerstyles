@@ -25,7 +25,12 @@ def spline_balance(image, sliders):
     weights = np.array([0.2126, 0.7152, 0.0722])
     original = np.sum(source * weights, axis=-1, keepdims=True)
     adjusted = np.sum(result * weights, axis=-1, keepdims=True)
-    return np.clip(result * (original / np.maximum(adjusted, 1e-6)), 0, 1)
+    # Upstream divides by the actual positive luminance. Pixels with zero adjusted
+    # luminance become black at the final uint8 conversion; represent that explicitly.
+    ratio = np.divide(
+        original, adjusted, out=np.zeros_like(original), where=adjusted > 0
+    )
+    return np.clip(result * ratio, 0, 1)
 
 
 def enhancement_reference(image, brightness, contrast, saturation):
@@ -62,6 +67,48 @@ def test_parabolic_curve_matches_scipy_on_dense_ramp(center, maximum, slider):
         actual[0, 0, -1],
         torch.full((3,), np.clip(center + slider * maximum, 0, 1)),
     )
+
+
+@pytest.mark.parametrize("center,maximum,slider", [(0.5, 1.0, -0.25), (0.8, 0.2, -0.8)])
+def test_curve_preserves_small_values_when_control_points_define_x_squared(
+    center, maximum, slider
+):
+    # These control points lie on y=x^2. An absolute tolerance would hide
+    # cancellation of the small positive outputs that luminosity later restores.
+    ramp = torch.tensor([0, 1e-9, 1e-7, 1e-5, 1e-3, 1])
+    rgb = ramp.reshape(1, 1, -1, 1).expand(-1, -1, -1, 3)
+    result = _adjust_curve(rgb, torch.tensor([slider] * 3), center, maximum)
+    torch.testing.assert_close(
+        result.double(), rgb.double().square(), rtol=2e-7, atol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "pixel,sliders",
+    [
+        ((202, 0, 0), (-0.801, 0, 0)),
+        ((0, 202, 0), (0, -0.801, 0)),
+        ((0, 0, 202), (0, 0, -0.801)),
+        ((11, 11, 11), (-0.259, -0.259, -0.259)),
+    ],
+)
+def test_balance_restores_small_positive_adjusted_luminance(pixel, sliders):
+    # Upstream returns these same byte values. The curves leave positive RGB,
+    # so luminosity restoration must recover a primary color or equal-channel gray.
+    image = torch.tensor(pixel, dtype=torch.float32).reshape(1, 1, 1, 3) / 255
+    result = color_balance(image, *sliders)
+    torch.testing.assert_close(result, image, rtol=1e-6, atol=0)
+
+
+@pytest.mark.parametrize("green", [1e-9, 1e-18])
+def test_balance_restores_luminosity_when_only_a_tiny_channel_survives(green):
+    image = torch.tensor([[[[0.3, green, 0.3]]]])
+    # Red and blue are clipped to zero by their curves; green remains positive.
+    # Preserving input luminance therefore determines the green output directly.
+    original_luminance = 0.3 * 0.2126 + green * 0.7152 + 0.3 * 0.0722
+    expected = torch.tensor([[[[0, original_luminance / 0.7152, 0]]]])
+    result = color_balance(image, -1, -0.25, -1)
+    torch.testing.assert_close(result, expected, rtol=1e-6, atol=0)
 
 
 @pytest.mark.parametrize("sliders", list(product([-1, 0, 1], repeat=3)))
