@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
+
 import asyncio
 import importlib.util
 import inspect
@@ -12,20 +15,22 @@ from gpu_layerstyles import comfy_entrypoint
 from gpu_layerstyles.color_correct_brightness_and_contrast import BrightnessContrastV2
 from gpu_layerstyles.color_correct_color_balance import ColorBalance
 from gpu_layerstyles.color_correct_color_temperature import ColorTemperature
+from gpu_layerstyles.color_match import ColorMatch
 
 NODES = [ColorBalance, BrightnessContrastV2, ColorTemperature]
 NEUTRAL = [(0, 0, 0), (1, 1, 1), (0,)]
 ACTIVE = [(0.3, -0.2, 0.4), (1.2, 0.8, 1.3), (-37,)]
 
 
-def test_extension_registers_exactly_three_v3_nodes():
+def test_extension_registers_exactly_four_v3_nodes():
     extension = asyncio.run(comfy_entrypoint())
     assert isinstance(extension, ComfyExtension)
-    assert asyncio.run(extension.get_node_list()) == NODES
-    assert [node.define_schema().node_id for node in NODES] == [
+    assert asyncio.run(extension.get_node_list()) == [*NODES, ColorMatch]
+    assert [node.define_schema().node_id for node in [*NODES, ColorMatch]] == [
         "GPULayerStyles_ColorBalance",
         "GPULayerStyles_BrightnessContrastV2",
         "GPULayerStyles_ColorTemperature",
+        "GPULayerStyles_ColorMatch",
     ]
 
 
@@ -40,7 +45,9 @@ def test_root_loader_supports_clone_and_zip_installations(monkeypatch):
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     extension = asyncio.run(module.comfy_entrypoint())
-    assert len(asyncio.run(extension.get_node_list())) == 3
+    assert [
+        node.define_schema().node_id for node in asyncio.run(extension.get_node_list())
+    ] == [node.define_schema().node_id for node in [*NODES, ColorMatch]]
 
 
 @pytest.mark.parametrize(

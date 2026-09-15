@@ -1,6 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
+
 """Chunked execution with ComfyUI's device, memory, and progress management."""
 
 import logging
+import traceback
 from collections.abc import Callable
 
 import torch
@@ -9,6 +13,7 @@ from comfy.utils import ProgressBar
 from comfy_api.latest import io
 
 ColorOperation = Callable[[torch.Tensor], torch.Tensor]
+ChunkOperation = Callable[[int, int, torch.Tensor, torch.device], None]
 _MIB = 1024 * 1024
 _WORKING_MULTIPLIER = 8
 _LOGGER = logging.getLogger(__name__)
@@ -42,16 +47,18 @@ def execution_inputs() -> list:
     ]
 
 
-def _validate_image(image: torch.Tensor) -> None:
+def _validate_image(image: torch.Tensor, name: str = "IMAGE") -> None:
     if not isinstance(image, torch.Tensor) or not image.is_floating_point():
-        raise TypeError("IMAGE must be a floating-point torch.Tensor.")
+        raise TypeError(f"{name} must be a floating-point torch.Tensor.")
     if (
         image.layout != torch.strided
         or image.ndim != 4
         or image.shape[-1] not in (3, 4)
         or any(size == 0 for size in image.shape)
     ):
-        raise ValueError("IMAGE must have nonempty shape [B, H, W, 3] or [B, H, W, 4].")
+        raise ValueError(
+            f"{name} must have nonempty shape [B, H, W, 3] or [B, H, W, 4]."
+        )
 
 
 def _is_allocation_error(error: Exception) -> bool:
@@ -99,6 +106,130 @@ def process_image(
     batch_size: int = 0,
 ) -> torch.Tensor:
     _validate_image(image)
+
+    def process_chunk(start, count, destination, device):
+        _process_chunk(
+            image[start : start + count],
+            destination[start : start + count],
+            operation,
+            device,
+        )
+
+    frame_bytes = image[0].numel() * 4
+    return _execute(
+        image,
+        process_chunk,
+        lambda count: _WORKING_MULTIPLIER * count * frame_bytes,
+        output_device,
+        batch_size,
+    )
+
+
+def _prepare_reference_chunk[Reference](
+    image_ref: torch.Tensor,
+    prepare_reference: Callable[[torch.Tensor], Reference],
+    device: torch.device,
+) -> Reference:
+    # Conversion and preparation-only tensors leave scope before cache publication.
+    chunk = image_ref.to(device=device, dtype=torch.float32)
+    return prepare_reference(chunk[..., :3])
+
+
+@torch.no_grad()
+def process_image_pair[Reference](
+    image: torch.Tensor,
+    image_ref: torch.Tensor,
+    prepare_reference: Callable[[torch.Tensor], Reference],
+    operation: Callable[[torch.Tensor, Reference], torch.Tensor],
+    output_device: str = "cpu",
+    batch_size: int = 0,
+    *,
+    matching_dimensions: bool = False,
+    active: bool = True,
+) -> torch.Tensor:
+    """Execute paired RGB operations with an invocation-local singleton reference.
+
+    Callables must leave inputs and prepared references untouched. Inactive calls
+    validate both images but only copy the target, without preparing references.
+    """
+    _validate_image(image)
+    _validate_image(image_ref, "image_ref")
+    if len(image_ref) not in (1, len(image)):
+        raise ValueError(
+            "image_ref must contain one frame or match the image batch length."
+        )
+    if matching_dimensions and image.shape[1:3] != image_ref.shape[1:3]:
+        raise ValueError("MVGD requires matching target/reference height and width.")
+
+    singleton = len(image_ref) == 1
+    unprepared = object()
+    cached_reference = unprepared
+
+    def process_chunk(start, count, destination, device):
+        nonlocal cached_reference
+        prepared = None
+        if active:
+            if singleton:
+                if cached_reference is unprepared:
+                    # Publish only after successful preparation; retain across
+                    # subsequent target OOM retries at the same frame indices.
+                    cached_reference = _prepare_reference_chunk(
+                        image_ref, prepare_reference, device
+                    )
+                prepared = cached_reference
+            else:
+                prepared = _prepare_reference_chunk(
+                    image_ref[start : start + count], prepare_reference, device
+                )
+
+        def color_operation(rgb):
+            return operation(rgb, prepared) if active else rgb
+
+        try:
+            _process_chunk(
+                image[start : start + count],
+                destination[start : start + count],
+                color_operation,
+                device,
+            )
+        finally:
+            # Paired preparation belongs only to this attempt. The singleton
+            # survives in cached_reference until the invocation's finally block.
+            color_operation = prepared = None
+
+    target_frame_bytes = image[0].numel() * 4
+    reference_frame_bytes = image_ref[0].numel() * 4
+
+    def working_memory(count):
+        return _WORKING_MULTIPLIER * (
+            count * target_frame_bytes
+            + (1 if singleton else count) * reference_frame_bytes
+        )
+
+    try:
+        return _execute(image, process_chunk, working_memory, output_device, batch_size)
+    except BaseException as error:
+        # A caller may retain the exception and its chained causes. Keep the
+        # diagnostic tracebacks, but release their tensors and prepared state.
+        seen = set()
+        current = error
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            traceback.clear_frames(current.__traceback__)
+            current = current.__cause__ or current.__context__
+        raise
+    finally:
+        cached_reference = unprepared
+
+
+def _execute(
+    image: torch.Tensor,
+    process_chunk: ChunkOperation,
+    working_memory: Callable[[int], int],
+    output_device: str,
+    batch_size: int,
+) -> torch.Tensor:
+    """Shared destination allocation, retry, progress, and cancellation loop."""
     if output_device not in ("gpu", "cpu"):
         raise ValueError("output_device must be 'gpu' or 'cpu'.")
     if (
@@ -116,11 +247,10 @@ def process_image(
     frames, height, width, channels = image.shape
     frame_bytes = height * width * channels * 4
     output_bytes = frames * frame_bytes
-    working_bytes = _WORKING_MULTIPLIER * frame_bytes
     # A CPU destination also needs reservation when compute itself is on CPU.
     reservation = output_bytes if destination_device == device else 0
     chunk_size = min(frames, batch_size or 64)
-    model_management.free_memory(reservation + chunk_size * working_bytes, device)
+    model_management.free_memory(reservation + working_memory(chunk_size), device)
     available = int(model_management.get_free_memory(device))
     if reservation > available:
         raise _output_memory_error(output_bytes, destination_device)
@@ -140,12 +270,7 @@ def process_image(
         model_management.throw_exception_if_processing_interrupted()
         count = min(chunk_size, frames - start)
         try:
-            _process_chunk(
-                image[start : start + count],
-                destination[start : start + count],
-                operation,
-                device,
-            )
+            process_chunk(start, count, destination, device)
         except Exception as error:
             if not _is_allocation_error(error):
                 raise
@@ -174,7 +299,7 @@ def process_image(
 
         # Exit the except block first: its traceback can retain GPU tensors.
         model_management.soft_empty_cache()
-        model_management.free_memory(chunk_size * working_bytes, device)
+        model_management.free_memory(working_memory(chunk_size), device)
 
     model_management.throw_exception_if_processing_interrupted()
     return destination

@@ -41,8 +41,8 @@ characters; avoid lists and exhaustive change logs.
 
 - ComfyUI supplies runtime PyTorch and `comfy_api`. Do not add a PyTorch runtime
   dependency that could replace ComfyUI's configured CUDA build.
-- Keep CPU PyTorch and the NumPy, Pillow, and SciPy reference-test dependencies in
-  the `dev` group. Keep the explicit CPU wheel index configured for test PyTorch.
+- Keep CPU PyTorch and the NumPy, Pillow, SciPy, and color-matcher reference-test
+  dependencies in the `dev` group. Keep the explicit CPU wheel index for test PyTorch.
 - Update `pyproject.toml` and `uv.lock` together. There are currently no additional
   runtime dependencies and no `requirements.txt`. If additional runtime dependencies
   are introduced, maintain `requirements.txt` by hand to match only
@@ -52,11 +52,26 @@ characters; avoid lists and exhaustive change logs.
   loader for clone and ZIP installations. Include the loader, tests, lockfile, and
   this file in source distributions.
 
+## Licensing and attribution
+
+- Begin every project Python source file, including the root loader and tests,
+  with these headers:
+
+  ```python
+  # SPDX-License-Identifier: AGPL-3.0-only
+  # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
+  ```
+
+- Keep project-code and original-algorithm-source attribution in `COPYRIGHT`,
+  and include it in source and wheel distributions. Qualify color-matcher's
+  attribution as the original algorithm source. Preserve the upstream fixture
+  provenance and license notices separately from the project's Python code.
+
 ## Node behavior and validation
 
-- Register exactly three V3 nodes through `ComfyExtension`, with their existing
+- Register exactly four V3 nodes through `ComfyExtension`, with their existing
   node IDs and control names, order, ranges, steps, and adjustment defaults.
-- Default `output_device` to `"cpu"` in the shared schema, all three node methods,
+- Default `output_device` to `"cpu"` in the shared schema, all four node methods,
   and the executor; retain option order `["gpu", "cpu"]`. CPU output still processes
   chunks on ComfyUI's selected compute device and copies them into a preallocated
   CPU destination. Explicit GPU output stays on the selected compute device.
@@ -67,10 +82,12 @@ characters; avoid lists and exhaustive change logs.
   reduced size for the rest of that invocation; start fresh on the next invocation.
 - Process RGB in float32, preserve alpha, and leave input tensors untouched. Keep
   contrast statistics local to each frame and skip neutral adjustments.
-- Before destination allocation, ask ComfyUI to free memory for working space
-  estimated at eight times the initial chunk's FP32 size, plus the destination when
-  it shares the compute device. Preserve explicit output placement on allocation
-  retries, complete-output and one-frame errors, cancellation, and progress.
+- Ask ComfyUI to free memory before allocating working space and outputs,
+  accounting for all inputs and the output device. Preserve output placement,
+  allocation retries, clear memory errors, cancellation, and progress.
+- Preserve ColorMatch's documented methods and reference requirements. Validate
+  its public behavior and compare representative images against upstream, allowing
+  minor float32 numerical differences.
 - Use ComfyUI's existing global cache controls for accumulated outputs. Do not
   change global cache settings automatically or add per-node cache-eviction or
   precision controls. Document complete-batch RAM needs and distinguish internal

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
+
 """Small ComfyUI test doubles; these tests exercise real CPU PyTorch tensors.
 
 ComfyUI installation and CUDA execution are checked separately in the host app.

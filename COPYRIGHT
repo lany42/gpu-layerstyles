@@ -1,0 +1,37 @@
+gpu-layerstyles
+
+Project source code:
+Copyright (c) 2026 Lany Atwood <lany@colorized.life>
+License: GNU Affero General Public License, version 3 only
+(AGPL-3.0-only); see LICENSE.
+
+The Python source in this repository, including the native PyTorch ColorMatch
+implementation, ComfyUI loader, and tests, was written for GPU LayerStyles
+and is licensed under AGPL-3.0-only.
+
+Original algorithm source:
+Christopher Hahne's color-matcher served as the original source for the MKL
+and analytical MVGD algorithms and supplies the development-only numerical
+reference. The implementations and tests in this project are GPU LayerStyles
+code under the project license above.
+
+Upstream project: https://github.com/hahnec/color-matcher
+Reference release: color-matcher 0.6.0
+Original solver module: color_matcher/mvgd_matcher.py
+GitHub v0.5.0 baseline: 40ea94e6c36cd93d119e97875e80eb409ada1422
+Original source copyright:
+Copyright (c) 2020 Christopher Hahne <info@christopherhahne.de>
+Original upstream test copyright:
+Copyright (c) 2020 Christopher Hahne <inbox@christopherhahne.de>
+Original source license: GNU General Public License, version 3 or later
+(GPL-3.0-or-later); see LICENSES/color-matcher-LICENSE.
+
+Vendored test photographs:
+tests/data/color_matcher/scotland_house.png
+tests/data/color_matcher/scotland_plain.png
+
+These images are copied unchanged from the color-matcher 0.6.0 wheel's test
+data. They retain their upstream provenance and applicable licensing. The
+wheel supplies no separate image copyright or license notices. Its original
+GPL license text is retained in LICENSES/color-matcher-LICENSE. See
+tests/data/color_matcher/README.md for the source URL and artifact hashes.

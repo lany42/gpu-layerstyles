@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
+
 """Color operations on float32 RGB chunks shaped [B, H, W, 3].
 
 All operations leave their input untouched. Neutral operations return the input;

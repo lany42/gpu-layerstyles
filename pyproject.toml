@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.13"
 # ComfyUI supplies PyTorch and comfy_api; do not replace its CUDA build.
 license = "AGPL-3.0-only"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "LICENSES/color-matcher-LICENSE", "COPYRIGHT"]
 dependencies = []
 
 [build-system]
@@ -24,6 +24,7 @@ dev = [
     "scipy",
     "pytest>=9,<10",
     "ruff>=0.16.6",
+    "color-matcher==0.6.0",
 ]
 
 [tool.uv]
