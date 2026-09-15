@@ -71,8 +71,28 @@ def test_schema_and_execute_controls(node, names, default, minimum, maximum, ste
         )
     output, batch = schema.inputs[-2:]
     assert output.options == ["gpu", "cpu"]
-    assert output.default == "gpu"
-    assert (batch.default, batch.min, batch.step) == (0, 0, 1)
+    assert output.default == "cpu"
+    assert (batch.default, batch.min, batch.max, batch.step) == (0, 0, 2**31 - 1, 1)
+    parameters = inspect.signature(node.execute).parameters
+    assert parameters["output_device"].default == "cpu"
+    assert parameters["batch_size"].default == 0
+
+
+@pytest.mark.parametrize("node,controls", list(zip(NODES, ACTIVE)))
+@pytest.mark.parametrize("output_device", [None, "cpu", "gpu"])
+def test_node_output_placement_with_mocked_gpu(
+    node, controls, output_device, runtime, gpu_routing
+):
+    image = torch.rand(5, 2, 3, 4, dtype=torch.float64)
+    before = image.clone()
+    options = {} if output_device is None else {"output_device": output_device}
+    result = node.execute(image, *controls, **options).result[0]
+    destination = runtime.device if output_device == "gpu" else torch.device("cpu")
+    assert gpu_routing.allocations == [(tuple(image.shape), destination, torch.float32)]
+    assert gpu_routing.transfers == [(5, runtime.device, torch.float32)]
+    assert result.dtype == torch.float32
+    assert torch.equal(result[..., 3], image[..., 3].float())
+    assert torch.equal(image, before)
 
 
 @pytest.mark.parametrize("node,controls", list(zip(NODES, NEUTRAL)))
@@ -133,18 +153,39 @@ def test_batches_match_independent_frames_and_preserve_input(
         assert torch.equal(output[..., 3], image[..., 3].float())
 
 
-def test_normal_three_node_chain_matches_frame_processing():
-    image = torch.rand((5, 3, 7, 4), generator=torch.Generator().manual_seed(22))
+@pytest.mark.parametrize("use_defaults", [True, False], ids=["defaults", "explicit"])
+def test_normal_three_node_chain_matches_frame_processing(runtime, use_defaults):
+    image = torch.rand(
+        (67, 3, 7, 4), dtype=torch.float64, generator=torch.Generator().manual_seed(22)
+    )
+    image *= torch.linspace(0.05, 1.0, len(image)).reshape(-1, 1, 1, 1)
+    before = image.clone()
+    options = (
+        [{}, {}, {}]
+        if use_defaults
+        else [
+            {"output_device": "gpu", "batch_size": 2},
+            {"output_device": "gpu", "batch_size": 3},
+            {"output_device": "cpu", "batch_size": 2},
+        ]
+    )
 
     def chain(frames):
-        frames = ColorTemperature.execute(frames, -25, "gpu", 2).result[0]
-        frames = ColorBalance.execute(frames, 0.3, -0.2, 0.1, "gpu", 3).result[0]
-        return BrightnessContrastV2.execute(frames, 1.2, 1.1, 0.9, "cpu", 2).result[0]
+        frames = ColorTemperature.execute(frames, -25, **options[0]).result[0]
+        frames = ColorBalance.execute(frames, 0.3, -0.2, 0.1, **options[1]).result[0]
+        return BrightnessContrastV2.execute(frames, 1.2, 1.1, 0.9, **options[2]).result[
+            0
+        ]
 
     output = chain(image)
+    if use_defaults:
+        assert [progress.updates for progress in runtime.progress] == [[64, 67]] * 3
     singles = torch.cat([chain(frame[None]) for frame in image])
     torch.testing.assert_close(output, singles)
-    assert torch.equal(output[..., 3], image[..., 3])
+    assert output.dtype == torch.float32
+    assert output.device.type == "cpu"
+    assert torch.equal(output[..., 3], image[..., 3].float())
+    assert torch.equal(image, before)
 
 
 def test_processing_stays_float32_inside_autocast():

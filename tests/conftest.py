@@ -155,3 +155,27 @@ def runtime(monkeypatch):
     )
     monkeypatch.setattr(_execution, "ProgressBar", ProgressBar)
     return state
+
+
+@pytest.fixture
+def gpu_routing(runtime, monkeypatch):
+    """Record GPU routing requests while running tensor operations on real CPU tensors."""
+    runtime.device = torch.device("cuda:2")
+    state = SimpleNamespace(allocations=[], transfers=[])
+    original_empty = torch.empty
+    original_to = torch.Tensor.to
+
+    def empty(shape, *, device, dtype):
+        assert runtime.free_requests
+        state.allocations.append((tuple(shape), device, dtype))
+        return original_empty(shape, dtype=dtype, device="cpu")
+
+    def to(tensor, *args, **kwargs):
+        if kwargs.get("device") == runtime.device:
+            state.transfers.append((len(tensor), kwargs["device"], kwargs["dtype"]))
+            kwargs["device"] = torch.device("cpu")
+        return original_to(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "empty", empty)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    return state

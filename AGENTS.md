@@ -55,13 +55,27 @@ characters; avoid lists and exhaustive change logs.
 ## Node behavior and validation
 
 - Register exactly three V3 nodes through `ComfyExtension`, with their existing
-  node IDs and control names, order, ranges, steps, and defaults.
+  node IDs and control names, order, ranges, steps, and adjustment defaults.
+- Default `output_device` to `"cpu"` in the shared schema, all three node methods,
+  and the executor; retain option order `["gpu", "cpu"]`. CPU output still processes
+  chunks on ComfyUI's selected compute device and copies them into a preallocated
+  CPU destination. Explicit GPU output stays on the selected compute device.
+- Keep `batch_size=0` as the default and start automatic chunks at
+  `min(input_frame_count, 64)`. Positive sizes are capped only by input length and
+  can exceed 64. On allocation failure, release failed temporaries, halve the
+  failing chunk count to a minimum of one, and retry the same frames. Keep the
+  reduced size for the rest of that invocation; start fresh on the next invocation.
 - Process RGB in float32, preserve alpha, and leave input tensors untouched. Keep
   contrast statistics local to each frame and skip neutral adjustments.
-- Use ComfyUI's selected device and memory management. Account for the complete
-  destination as well as chunk working memory, and preserve explicit output
-  placement when retrying allocation failures.
+- Before destination allocation, ask ComfyUI to free memory for working space
+  estimated at eight times the initial chunk's FP32 size, plus the destination when
+  it shares the compute device. Preserve explicit output placement on allocation
+  retries, complete-output and one-frame errors, cancellation, and progress.
+- Use ComfyUI's existing global cache controls for accumulated outputs. Do not
+  change global cache settings automatically or add per-node cache-eviction or
+  precision controls. Document complete-batch RAM needs and distinguish internal
+  chunk sizing from passing smaller batches through the entire workflow.
 - Automated tests use real CPU tensors with ComfyUI API and memory test doubles.
   ComfyUI installation, GPU execution, visual comparisons, and benchmarking are
-  manual follow-ups. Do not add a benchmark harness or a performance threshold as
-  a prerequisite for delivery.
+  manual follow-ups, including a 32-versus-64-frame chunk speed comparison. Do not
+  add a benchmark harness or a performance threshold as a prerequisite for delivery.

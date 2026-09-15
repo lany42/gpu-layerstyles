@@ -36,7 +36,7 @@ class ColorBalance(io.ComfyNode):
         cyan_red: float,
         magenta_green: float,
         yellow_blue: float,
-        output_device: str = "gpu",
+        output_device: str = "cpu",
         batch_size: int = 0,
     ) -> io.NodeOutput:
         return io.NodeOutput(

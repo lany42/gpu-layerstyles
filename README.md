@@ -67,43 +67,78 @@ Small differences from an 8-bit image-editing pipeline are expected.
 
 ## Output placement and memory
 
-- **`output_device`:** `gpu` (default) keeps output on ComfyUI's selected compute
-  device. `cpu` transfers each finished chunk directly into the CPU destination.
-  In ComfyUI CPU mode, both settings return CPU tensors.
-- **`batch_size`:** `0` (default) chooses a chunk size automatically. A positive
-  integer requests that many frames per chunk, limited by the number of input
-  frames. Allocation failures halve the chunk size down to one frame.
+- **`output_device`:** `cpu` (default) processes float32 chunks on ComfyUI's selected
+  compute device and copies each completed chunk into a preallocated CPU output.
+  `gpu` keeps output on the selected compute device to avoid transfers between
+  compatible nodes. In ComfyUI CPU mode, both settings return CPU tensors. New nodes
+  and calls omitting this control use CPU output; saved workflows explicitly
+  selecting `gpu` keep that placement.
+- **`batch_size`:** `0` (default) starts with `min(input_frame_count, 64)` frames per
+  chunk. A positive integer requests that many frames, capped only by the input
+  length; values above 64 are supported. Allocation failures halve the failing
+  chunk size down to one frame and retry the same frames. The reduced size applies
+  for the rest of that invocation; each new invocation starts fresh.
 
-The executor asks ComfyUI to free memory before allocation, including space for the
-complete output when it resides on the compute device. Automatic chunks use an
-eight-times-frame-size working estimate and up to 25% of remaining available memory,
-capped at 512 MiB and 32 frames, with a one-frame minimum. The destination is
-preallocated and filled by chunks. Progress and cancellation are checked between
-chunks. Processing uses ordinary PyTorch operations with gradient tracking disabled.
+Before allocating the destination, the executor asks ComfyUI to free memory for
+working space estimated at eight times the initial chunk's FP32 size, plus the
+complete output when it shares the compute device. This includes the CPU output
+when ComfyUI runs in CPU mode. Automatic sizing starts at up to 64 frames regardless
+of reported free memory and adapts through allocation retries. Progress and
+cancellation are checked between chunks. Processing and output stay in float32,
+with gradient tracking disabled.
 
 If the complete output cannot fit, or processing a single frame still fails, the
 node reports an error with steps to reduce memory use. Output placement is never
 changed automatically.
 
-ComfyUI can cache complete GPU batches. Chunking bounds temporary allocations;
-cached outputs still occupy memory. A float32 RGB batch of **240 frames at
-720×1280** occupies about **2.47 GiB** per output (RGBA: **3.30 GiB**), before
-temporary tensors and other cached data.
+### Complete batches and system RAM
 
-For the usual chain, set **ColorTemperature → ColorBalance** to GPU output. Set
-**Brightness Contrast V2** to CPU output when its downstream consumer requires CPU
-tensors. Free cached outputs, reduce the input batch/resolution, or choose CPU
-output if the complete GPU destination cannot fit.
+CPU output stores complete batches in system RAM. A batch of **2048 frames
+at 1024×1024, RGB float32** requires `2048 × 1024 × 1024 × 3 × 4` bytes:
+
+| Tensors retained in CPU memory | RAM before other allocations |
+| --- | --- |
+| One complete batch | 24 GiB |
+| Input and one output | 48 GiB |
+| Original input and all three node outputs | 96 GiB |
+
+Models, temporary tensors, other cached data, and the rest of ComfyUI require
+additional memory. Internal chunk sizing controls working memory. Passing smaller
+image batches through the entire workflow reduces complete-batch storage needs.
+GPU output can speed up compatible node chains by avoiding CPU transfers, provided
+the complete outputs fit in VRAM.
+
+### ComfyUI cache controls
+
+Current upstream ComfyUI defaults to RAM-pressure caching, which can evict cached
+results as available system RAM falls below its thresholds. `--cache-ram` values
+specify **free-memory headroom thresholds**, not maximum cache sizes: the first
+sets the active-cache threshold, and the optional second sets the inactive-cache
+and pin threshold. For example, `--cache-ram 8` requests 8 GB of active-cache
+headroom; it does not limit the cache to 8 GB. See the
+[upstream cache controls](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/cli_args.py#L123-L128).
+
+The global launch option `--cache-none` reduces RAM/VRAM used for cached results at
+the cost of recomputing every node on each run. It still requires memory for inputs
+and outputs needed by the running workflow. Cache options, accepted arguments, and
+defaults depend on the installed ComfyUI version; check `python main.py --help`
+from your ComfyUI installation and update if the RAM-pressure options are missing.
+This pack does not change global cache settings automatically or add a per-node
+cache-eviction control.
 
 ## Development and verification
 
 Create an isolated CPU test environment with Python 3.13 and `uv`:
 
 ```bash
-uv sync --locked --group dev
-.venv/bin/python -m pytest -q
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
+uv python find
+uv sync --locked
+uv run --offline --locked ruff check --select I --fix .
+uv run --offline --locked ruff check --fix .
+uv run --offline --locked ruff format .
+uv run --offline --locked ruff check .
+uv run --locked pytest
+uv lock --check
 uv build
 ```
 
@@ -117,14 +152,18 @@ Tests compare dense ramps and extreme ColorBalance sliders against SciPy, and
 enhancements against float references and Pillow with quantization tolerance. They
 also cover curve cancellation near black, restoration of tiny positive adjusted
 luminance, neutral identity, clipping, zero/near-zero luminance, alpha, input
-immutability, mixed-brightness batches, narrow/noncontiguous inputs, partial chunks,
-allocation retries, progress, cancellation, and loader/schema registration.
+immutability, mixed-brightness batches, narrow/noncontiguous inputs, the 64-frame
+automatic boundary, larger explicit chunks, allocation retries, default CPU and
+explicit GPU routing, complete-output reservations, progress, cancellation, and
+loader/schema registration. A three-node chain with default output settings is
+compared against independent-frame processing.
 
 The automated suite runs real CPU tensors with ComfyUI API/memory test doubles.
 Device-routing tests simulate allocation requests; they do not execute CUDA.
 Installation testing in ComfyUI, GPU execution, visual comparisons, and benchmarking
-are manual follow-ups, including the 240-frame Temperature → ColorBalance →
-Brightness Contrast chain. No benchmark harness is included.
+are manual follow-ups, including the Temperature → ColorBalance → Brightness
+Contrast chain and a 32-versus-64-frame chunk speed comparison. No benchmark harness
+or performance threshold is required for delivery.
 
 ## License
 

@@ -1,4 +1,5 @@
 import weakref
+from itertools import accumulate
 
 import pytest
 import torch
@@ -43,25 +44,25 @@ def test_rejects_invalid_output_device():
 
 
 @pytest.mark.parametrize(
-    "frames,frame_bytes,available,expected",
+    "frames,expected",
     [
-        (240, 12, 1024**3, 32),  # Frame count cap.
-        (5, 12, 1024**3, 5),
-        (240, 720 * 1280 * 3 * 4, 16 * 1024**3, 6),  # 512 MiB cap.
-        (240, 720 * 1280 * 3 * 4, 512 * 1024**2, 1),  # Quarter of free memory.
-        (50, 1024, 8 * 1024 * 4 * 7, 7),
-        (50, 1024, 0, 1),
-        (50, 1024, -1, 1),
+        (1, [1]),
+        (17, [17]),
+        (63, [63]),
+        (64, [64]),
+        (65, [64, 1]),
+        (128, [64, 64]),
+        (131, [64, 64, 3]),
     ],
 )
-def test_auto_chunk_budget(frames, frame_bytes, available, expected):
-    assert _execution._automatic_chunk_size(frames, frame_bytes, available) == expected
-
-
-def test_auto_chunk_reserves_complete_output_first(runtime):
-    image = torch.rand(12, 2, 3, 4)
+@pytest.mark.parametrize("working_headroom", [0, 1024**3])
+def test_automatic_chunks_reserve_initial_work_and_complete_output(
+    runtime, frames, expected, working_headroom
+):
+    image = torch.rand(frames, 2, 3, 4, dtype=torch.float64)
     frame_bytes = 2 * 3 * 4 * 4
-    runtime.available = image.numel() * 4 + 4 * 8 * frame_bytes * 3
+    output_bytes = frames * frame_bytes
+    runtime.available = output_bytes + working_headroom
     calls = []
 
     def operation(rgb):
@@ -69,11 +70,13 @@ def test_auto_chunk_reserves_complete_output_first(runtime):
         return rgb
 
     result = process_image(image, operation)
-    assert calls == [3, 3, 3, 3]
+    assert calls == expected
     assert runtime.free_requests == [
-        (image.numel() * 4 + 8 * frame_bytes, runtime.device)
+        (output_bytes + expected[0] * 8 * frame_bytes, runtime.device)
     ]
-    assert torch.equal(result, image)
+    assert runtime.progress[0].total == frames
+    assert runtime.progress[0].updates == list(accumulate(expected))
+    assert torch.equal(result, image.float())
 
 
 def test_preallocation_follows_memory_management_and_partial_chunks_report_progress(
@@ -128,6 +131,68 @@ def test_oom_halves_chunk_size_retries_same_frames_and_releases_temporaries(
     assert torch.equal(image, before)
 
 
+@pytest.mark.parametrize("output_device", [None, "cpu", "gpu"])
+def test_automatic_oom_retries_64_32_16_and_restarts_fresh(
+    runtime, gpu_routing, monkeypatch, output_device
+):
+    image = torch.arange(149 * 4, dtype=torch.float64).reshape(149, 1, 1, 4)
+    before = image.clone()
+    calls, failed_tensors = [], []
+    fail = True
+
+    def operation(rgb):
+        start = int(rgb[0, 0, 0, 0].item()) // 4
+        calls.append((start, len(rgb)))
+        if fail and start >= 64 and len(rgb) > 16:
+            temporary = rgb.clone()
+            failed_tensors.extend((weakref.ref(rgb), weakref.ref(temporary)))
+            raise torch.OutOfMemoryError("simulated allocation failure")
+        return rgb + 0.125
+
+    def empty_cache():
+        assert all(reference() is None for reference in failed_tensors)
+        runtime.cache_clears += 1
+
+    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    options = {} if output_device is None else {"output_device": output_device}
+    result = process_image(image, operation, **options)
+    assert calls == [
+        (0, 64),
+        (64, 64),
+        (64, 32),
+        (64, 16),
+        (80, 16),
+        (96, 16),
+        (112, 16),
+        (128, 16),
+        (144, 5),
+    ]
+    assert runtime.cache_clears == 2
+    assert runtime.progress[0].updates == [64, 80, 96, 112, 128, 144, 149]
+    reservation = image.numel() * 4 if output_device == "gpu" else 0
+    working_bytes = 8 * 4 * 4
+    assert runtime.free_requests == [
+        (reservation + 64 * working_bytes, runtime.device),
+        (32 * working_bytes, runtime.device),
+        (16 * working_bytes, runtime.device),
+    ]
+    destination = runtime.device if output_device == "gpu" else torch.device("cpu")
+    allocation = (tuple(image.shape), destination, torch.float32)
+    assert gpu_routing.allocations == [allocation]
+    assert torch.equal(result[..., :3], image[..., :3].float() + 0.125)
+    assert torch.equal(result[..., 3], image[..., 3].float())
+
+    fail = False
+    calls.clear()
+    fresh_result = process_image(image, operation, **options)
+    assert calls == [(0, 64), (64, 64), (128, 21)]
+    assert runtime.progress[1].updates == [64, 128, 149]
+    assert gpu_routing.allocations == [allocation, allocation]
+    assert runtime.free_requests[-1] == runtime.free_requests[0]
+    assert torch.equal(fresh_result, result)
+    assert torch.equal(image, before)
+
+
 def test_oom_in_final_partial_chunk_retries_only_that_chunk(runtime):
     image = torch.arange(7 * 3, dtype=torch.float32).reshape(7, 1, 1, 3)
     starts = []
@@ -174,8 +239,9 @@ def test_output_that_cannot_fit_fails_before_allocation(runtime, monkeypatch):
         process_image(torch.ones(1, 1, 1, 3), lambda rgb: rgb)
 
 
+@pytest.mark.parametrize("output_device", [None, "cpu", "gpu"])
 def test_output_allocation_failure_does_not_retry_or_change_placement(
-    runtime, monkeypatch
+    runtime, monkeypatch, output_device
 ):
     runtime.device = torch.device("cuda:2")
     calls = []
@@ -185,44 +251,44 @@ def test_output_allocation_failure_does_not_retry_or_change_placement(
         raise torch.OutOfMemoryError("simulated fragmentation")
 
     monkeypatch.setattr(torch, "empty", empty)
-    with pytest.raises(RuntimeError, match="complete.*cuda:2.*output_device='cpu'"):
-        process_image(torch.ones(2, 1, 1, 3), lambda rgb: rgb)
-    assert calls == [torch.device("cuda:2")]
+    options = {} if output_device is None else {"output_device": output_device}
+    destination = runtime.device if output_device == "gpu" else torch.device("cpu")
+    with pytest.raises(
+        RuntimeError, match=f"complete.*{destination}.*batch_size"
+    ) as caught:
+        process_image(torch.ones(2, 1, 1, 3), lambda rgb: rgb, **options)
+    if output_device == "gpu":
+        assert "output_device='cpu'" in str(caught.value)
+    assert calls == [destination]
     assert runtime.cache_clears == 0
 
 
-@pytest.mark.parametrize("output_device", ["gpu", "cpu"])
+@pytest.mark.parametrize("output_device", [None, "gpu", "cpu"])
+@pytest.mark.parametrize(
+    "batch_size,expected", [(0, [64, 64, 3]), (80, [80, 51]), (200, [131])]
+)
 def test_device_selection_and_gpu_reservation_with_cpu_backed_allocation_spy(
-    runtime, monkeypatch, output_device
+    runtime, gpu_routing, output_device, batch_size, expected
 ):
     """Verify routing policy without claiming actual GPU execution."""
-    runtime.device = torch.device("cuda:2")
-    image = torch.rand(5, 2, 3, 4)
-    original_empty = torch.empty
-    original_process = _execution._process_chunk
-    placements, chunks = [], []
-
-    def empty(shape, *, device, dtype):
-        placements.append(device)
-        return original_empty(shape, dtype=dtype, device="cpu")
-
-    def process(source, destination, operation, device):
-        chunks.append((len(source), device, destination.device))
-        original_process(source, destination, operation, torch.device("cpu"))
-
-    monkeypatch.setattr(torch, "empty", empty)
-    monkeypatch.setattr(_execution, "_process_chunk", process)
-    output = process_image(image, lambda rgb: rgb, output_device, 2)
+    image = torch.rand(131, 2, 3, 4, dtype=torch.float64)
+    if output_device != "gpu":
+        runtime.available = 0  # CPU output does not reserve the full batch on GPU.
+    options = {} if output_device is None else {"output_device": output_device}
+    output = process_image(image, lambda rgb: rgb, batch_size=batch_size, **options)
     expected_device = runtime.device if output_device == "gpu" else torch.device("cpu")
-    assert placements == [expected_device]
-    assert [count for count, _, _ in chunks] == [2, 2, 1]
-    assert all(device == runtime.device for _, device, _ in chunks)
+    assert gpu_routing.allocations == [
+        (tuple(image.shape), expected_device, torch.float32)
+    ]
+    assert gpu_routing.transfers == [
+        (count, runtime.device, torch.float32) for count in expected
+    ]
     reservation = image.numel() * 4 if output_device == "gpu" else 0
-    assert runtime.free_requests[0] == (
-        reservation + 2 * 8 * 2 * 3 * 4 * 4,
-        runtime.device,
-    )
-    assert torch.equal(output, image)
+    assert runtime.free_requests == [
+        (reservation + expected[0] * 8 * 2 * 3 * 4 * 4, runtime.device)
+    ]
+    assert runtime.progress[0].updates == list(accumulate(expected))
+    assert torch.equal(output, image.float())
 
 
 def test_nongpu_allocation_errors_propagate_without_retry(runtime):

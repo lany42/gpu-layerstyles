@@ -19,10 +19,11 @@ def execution_inputs() -> list:
         io.Combo.Input(
             "output_device",
             options=["gpu", "cpu"],
-            default="gpu",
+            default="cpu",
             tooltip=(
-                "Keep output on ComfyUI's selected compute device, or return it on CPU. "
-                "ComfyUI CPU mode always uses CPU."
+                "Return output on CPU (default) after float32 processing on ComfyUI's "
+                "selected compute device. GPU keeps output on that device to avoid "
+                "transfers between compatible nodes. ComfyUI CPU mode returns CPU output."
             ),
         ),
         io.Int.Input(
@@ -32,8 +33,10 @@ def execution_inputs() -> list:
             max=2**31 - 1,
             step=1,
             tooltip=(
-                "Frames per processing chunk. 0 selects automatically; "
-                "reduced if memory runs out."
+                "Frames per processing chunk. 0 starts at up to 64 frames. Positive "
+                "values can exceed 64, capped by the input length. Allocation failures "
+                "halve the chunk size for this run; each run starts fresh. Complete "
+                "inputs and outputs still need memory."
             ),
         ),
     ]
@@ -49,11 +52,6 @@ def _validate_image(image: torch.Tensor) -> None:
         or any(size == 0 for size in image.shape)
     ):
         raise ValueError("IMAGE must have nonempty shape [B, H, W, 3] or [B, H, W, 4].")
-
-
-def _automatic_chunk_size(frames: int, frame_bytes: int, available: int) -> int:
-    budget = min(max(available, 0) // 4, 512 * _MIB)
-    return max(1, min(frames, 32, budget // (_WORKING_MULTIPLIER * frame_bytes)))
 
 
 def _is_allocation_error(error: Exception) -> bool:
@@ -97,7 +95,7 @@ def _process_chunk(
 def process_image(
     image: torch.Tensor,
     operation: ColorOperation,
-    output_device: str = "gpu",
+    output_device: str = "cpu",
     batch_size: int = 0,
 ) -> torch.Tensor:
     _validate_image(image)
@@ -121,13 +119,11 @@ def process_image(
     working_bytes = _WORKING_MULTIPLIER * frame_bytes
     # A CPU destination also needs reservation when compute itself is on CPU.
     reservation = output_bytes if destination_device == device else 0
-    chunk_size = min(frames, batch_size) if batch_size else 1
+    chunk_size = min(frames, batch_size or 64)
     model_management.free_memory(reservation + chunk_size * working_bytes, device)
     available = int(model_management.get_free_memory(device))
     if reservation > available:
         raise _output_memory_error(output_bytes, destination_device)
-    if batch_size == 0:
-        chunk_size = _automatic_chunk_size(frames, frame_bytes, available - reservation)
 
     try:
         destination = torch.empty(

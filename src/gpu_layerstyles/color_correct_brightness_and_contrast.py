@@ -34,7 +34,7 @@ class BrightnessContrastV2(io.ComfyNode):
         brightness: float,
         contrast: float,
         saturation: float,
-        output_device: str = "gpu",
+        output_device: str = "cpu",
         batch_size: int = 0,
     ) -> io.NodeOutput:
         return io.NodeOutput(

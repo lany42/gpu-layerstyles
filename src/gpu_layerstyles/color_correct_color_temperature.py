@@ -30,7 +30,7 @@ class ColorTemperature(io.ComfyNode):
         cls,
         image: torch.Tensor,
         temperature: float,
-        output_device: str = "gpu",
+        output_device: str = "cpu",
         batch_size: int = 0,
     ) -> io.NodeOutput:
         return io.NodeOutput(
