@@ -12,6 +12,8 @@ from comfy import model_management
 from comfy.utils import ProgressBar
 from comfy_api.latest import io
 
+from ._resize import ImageResizer
+
 ColorOperation = Callable[[torch.Tensor], torch.Tensor]
 ChunkOperation = Callable[[int, int, torch.Tensor, torch.device], None]
 _MIB = 1024 * 1024
@@ -135,6 +137,79 @@ def _prepare_reference_chunk[Reference](
     return prepare_reference(chunk[..., :3])
 
 
+def _clear_exception_frames(error: BaseException) -> None:
+    # Retained exceptions must not keep failed temporaries or prepared state.
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        traceback.clear_frames(current.__traceback__)
+        current = current.__cause__ or current.__context__
+
+
+def _process_resize_chunk(
+    source: torch.Tensor,
+    destination: torch.Tensor,
+    resizer: ImageResizer,
+    device: torch.device,
+) -> None:
+    chunk = source.to(device=device, dtype=torch.float32)
+    destination.copy_(
+        resizer(chunk, model_management.throw_exception_if_processing_interrupted)
+    )
+
+
+@torch.no_grad()
+def process_image_resize(
+    image: torch.Tensor,
+    width: int,
+    height: int,
+    method: str = "bicubic",
+    output_device: str = "cpu",
+    batch_size: int = 0,
+) -> torch.Tensor:
+    """Downscale complete RGB/RGBA chunks into a differently sized destination."""
+    _validate_image(image)
+    for name, value in (("width", width), ("height", height)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
+    source_height, source_width = image.shape[1:3]
+    if width > source_width or height > source_height:
+        raise ValueError(
+            f"ImageScaleDown cannot upscale: source is {source_width}x{source_height}, "
+            f"requested {width}x{height}. Neither dimension may exceed the source."
+        )
+    if method not in ("bicubic", "lanczos"):
+        raise ValueError("method must be 'bicubic' or 'lanczos'.")
+
+    resizer = ImageResizer(
+        (source_height, source_width), (height, width), image.shape[-1], method
+    )
+
+    def process_chunk(start, count, destination, device):
+        _process_resize_chunk(
+            image[start : start + count],
+            destination[start : start + count],
+            resizer,
+            device,
+        )
+
+    try:
+        return _execute(
+            image,
+            process_chunk,
+            resizer.working_memory,
+            output_device,
+            batch_size,
+            output_shape=(len(image), height, width, image.shape[-1]),
+        )
+    except BaseException as error:
+        _clear_exception_frames(error)
+        raise
+    finally:
+        resizer.clear()
+
+
 @torch.no_grad()
 def process_image_pair[Reference](
     image: torch.Tensor,
@@ -211,12 +286,7 @@ def process_image_pair[Reference](
     except BaseException as error:
         # A caller may retain the exception and its chained causes. Keep the
         # diagnostic tracebacks, but release their tensors and prepared state.
-        seen = set()
-        current = error
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            traceback.clear_frames(current.__traceback__)
-            current = current.__cause__ or current.__context__
+        _clear_exception_frames(error)
         raise
     finally:
         cached_reference = unprepared
@@ -228,6 +298,8 @@ def _execute(
     working_memory: Callable[[int], int],
     output_device: str,
     batch_size: int,
+    *,
+    output_shape: tuple[int, int, int, int] | None = None,
 ) -> torch.Tensor:
     """Shared destination allocation, retry, progress, and cancellation loop."""
     if output_device not in ("gpu", "cpu"):
@@ -244,7 +316,8 @@ def _execute(
     model_management.throw_exception_if_processing_interrupted()
     device = model_management.get_torch_device()
     destination_device = device if output_device == "gpu" else torch.device("cpu")
-    frames, height, width, channels = image.shape
+    output_shape = image.shape if output_shape is None else output_shape
+    frames, height, width, channels = output_shape
     frame_bytes = height * width * channels * 4
     output_bytes = frames * frame_bytes
     # A CPU destination also needs reservation when compute itself is on CPU.
@@ -257,7 +330,7 @@ def _execute(
 
     try:
         destination = torch.empty(
-            image.shape, dtype=torch.float32, device=destination_device
+            output_shape, dtype=torch.float32, device=destination_device
         )
     except Exception as error:
         if not _is_allocation_error(error):

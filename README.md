@@ -1,6 +1,7 @@
 # GPU LayerStyles
 
-Four ComfyUI nodes for GPU-accelerated, float32 color adjustments and matching.
+Five ComfyUI nodes for GPU-accelerated, float32 color adjustments, matching,
+and image downscaling.
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
@@ -16,6 +17,7 @@ git clone https://git.colorized.life/gpu-layerstyles.git gpu-layerstyles
 | GPU LayerStyles Brightness Contrast V2 | `GPULayerStyles_BrightnessContrastV2` | `brightness`, `contrast`, `saturation` |
 | GPU LayerStyles ColorTemperature | `GPULayerStyles_ColorTemperature` | `temperature` |
 | GPU LayerStyles ColorMatch | `GPULayerStyles_ColorMatch` | `image_ref`, `method`, `strength` |
+| GPU LayerStyles ImageScaleDown | `GPULayerStyles_ImageScaleDown` | `width`, `height`, `method` |
 
 ## Performance
 
@@ -40,6 +42,10 @@ under [AGPL-3.0-only](LICENSE).
 Christopher Hahne's color-matcher served as the original source for the MKL and
 analytical MVGD algorithms and supplies the numerical reference used by our tests.
 See [COPYRIGHT](COPYRIGHT) for project and original-source attribution.
+
+ImageScaleDown's Lanczos algorithm is adapted from Pillow. Its
+[MIT-CMU notices](LICENSES/Pillow-LICENSE) and source attribution ship in source
+and wheel distributions alongside the project license.
 
 The two vendored test photographs retain their upstream provenance and applicable
 licensing; see the [fixture notices](tests/data/color_matcher/README.md). The

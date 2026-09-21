@@ -1,3 +1,5 @@
+Do NOT update the README unless explicitly requested.
+
 # Development workflow
 
 Run commands from the repository root.
@@ -69,9 +71,9 @@ characters; avoid lists and exhaustive change logs.
 
 ## Node behavior and validation
 
-- Register exactly four V3 nodes through `ComfyExtension`, with their existing
+- Register exactly five V3 nodes through `ComfyExtension`, with their existing
   node IDs and control names, order, ranges, steps, and adjustment defaults.
-- Default `output_device` to `"cpu"` in the shared schema, all four node methods,
+- Default `output_device` to `"cpu"` in the shared schema, all five node methods,
   and the executor; retain option order `["gpu", "cpu"]`. CPU output still processes
   chunks on ComfyUI's selected compute device and copies them into a preallocated
   CPU destination. Explicit GPU output stays on the selected compute device.
@@ -80,8 +82,16 @@ characters; avoid lists and exhaustive change logs.
   can exceed 64. On allocation failure, release failed temporaries, halve the
   failing chunk count to a minimum of one, and retry the same frames. Keep the
   reduced size for the rest of that invocation; start fresh on the next invocation.
-- Process RGB in float32, preserve alpha, and leave input tensors untouched. Keep
-  contrast statistics local to each frame and skip neutral adjustments.
+- Process RGB in float32 and leave input tensors untouched. Color nodes preserve
+  alpha unchanged. ImageScaleDown filters premultiplied RGB and alpha, restores
+  straight RGBA, and clamps only the final resize. Keep contrast statistics local
+  to each frame and skip neutral adjustments.
+- ImageScaleDown accepts exact positive integer dimensions and rejects either
+  dimension exceeding the source. Bicubic uses Torch antialiasing with
+  `align_corners=False`; Lanczos-3 follows Pillow's floating-point filter and
+  boundary normalization. Keep gather buffers bounded and coefficients local to
+  the invocation. Unchanged sizes return a float32 copy without filtering or
+  clamping. Keep Pillow's source attribution and license notices in distributions.
 - Ask ComfyUI to free memory before allocating working space and outputs,
   accounting for all inputs and the output device. Preserve output placement,
   allocation retries, clear memory errors, cancellation, and progress.

@@ -6,8 +6,9 @@ License: GNU Affero General Public License, version 3 only
 (AGPL-3.0-only); see LICENSE.
 
 The Python source in this repository, including the native PyTorch ColorMatch
-implementation, ComfyUI loader, and tests, was written for GPU LayerStyles
-and is licensed under AGPL-3.0-only.
+and ImageScaleDown implementations, ComfyUI loader, and tests, is licensed
+under AGPL-3.0-only. The adapted Lanczos algorithm retains the upstream
+attribution and notices below.
 
 Original algorithm source:
 Christopher Hahne's color-matcher served as the original source for the MKL
@@ -25,6 +26,22 @@ Original upstream test copyright:
 Copyright (c) 2020 Christopher Hahne <inbox@christopherhahne.de>
 Original source license: GNU General Public License, version 3 or later
 (GPL-3.0-or-later); see LICENSES/color-matcher-LICENSE.
+
+Pillow Lanczos algorithm source:
+ImageScaleDown's Torch Lanczos-3 implementation adapts Pillow's filter,
+half-pixel sample bounds, scale-dependent support, and boundary normalization.
+Pillow also supplies the development-only floating-point numerical reference.
+
+Upstream project: https://github.com/python-pillow/Pillow
+Inspected commit: 7d67d3764871ebfb4cbbd04459eede0bbc37966e
+Original source: src/libImaging/Resample.c
+Reference release: Pillow 12.3.0
+Original source copyright:
+Copyright © 1997-2011 by Secret Labs AB
+Copyright © 1995-2011 by Fredrik Lundh and contributors
+Copyright © 2010 by Jeffrey 'Alex' Clark and contributors
+Original source license: MIT-CMU; see LICENSES/Pillow-LICENSE for the
+complete retained upstream copyright, permission, and disclaimer notices.
 
 Vendored test photographs:
 tests/data/color_matcher/scotland_house.png
