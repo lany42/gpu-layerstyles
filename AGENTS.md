@@ -71,7 +71,7 @@ characters; avoid lists and exhaustive change logs.
 
 ## Node behavior and validation
 
-- Register exactly six V3 nodes through `ComfyExtension`, with their existing
+- Register exactly seven V3 nodes through `ComfyExtension`, with their existing
   node IDs and control names, order, ranges, steps, and adjustment defaults.
 - SliceImageBatch accepts an IMAGE and one Python-style index or slice string,
   defaulting to `":"`. After IMAGE validation, `":"` and `"::"` (ignoring surrounding
@@ -81,16 +81,25 @@ characters; avoid lists and exhaustive change logs.
   dtype, and pixel values; keep the batch dimension for single images. Use one
   selection operation without the shared executor, chunking, memory management,
   retries, or processing controls.
-- Default `output_device` to `"cpu"` in the shared schema, the five processing nodes,
+- CrossFade accepts matching RGB or RGBA batches as `images_1` and `images_2`,
+  `start_index=0`, and `frames=2`. Require exact integers, a nonnegative start,
+  and at least two transition frames that fit both inputs; never shorten a fade.
+  Keep the first batch's prefix, blend `frames` pairs starting at `start_index`
+  and index zero respectively, then keep the second batch's suffix. Discard the
+  first batch's remaining tail. Blend every channel, including alpha, linearly
+  from 0 to 1 inclusive without clamping. Output length is
+  `start_index + len(images_2)`. Use the shared executor and independent float32
+  output, with temporary buffers bounded by chunk size.
+- Default `output_device` to `"cpu"` in the shared schema, the six processing nodes,
   and the executor; retain option order `["gpu", "cpu"]`. CPU output still processes
   chunks on ComfyUI's selected compute device and copies them into a preallocated
   CPU destination. Explicit GPU output stays on the selected compute device.
-- For the five processing nodes, keep `batch_size=0` and start automatic chunks at
-  `min(input_frame_count, 64)`. Positive sizes are capped only by input length and
+- For the six processing nodes, keep `batch_size=0` and start automatic chunks at
+  `min(output_frame_count, 64)`. Positive sizes are capped only by output length and
   can exceed 64. On allocation failure, release failed temporaries, halve the
   failing chunk count to a minimum of one, and retry the same frames. Keep the
   reduced size for the rest of that invocation; start fresh on the next invocation.
-- The five processing nodes use float32 RGB and leave input tensors untouched.
+- The six processing nodes use float32 and leave input tensors untouched.
   Color nodes preserve alpha unchanged. ImageScaleDown filters premultiplied RGB
   and alpha, restores straight RGBA, and clamps only the final resize. Keep
   contrast statistics local to each frame and skip neutral adjustments.

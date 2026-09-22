@@ -18,6 +18,15 @@ for GPU LayerStyles under the project license above; no upstream code is include
 Upstream project: https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite
 Feature reference: videohelpersuite/image_latent_nodes.py and videohelpersuite/utils.py
 
+Crossfade feature inspiration:
+CrossFade was inspired by KJNodes' CrossFadeImages node. Its chunked linear
+blending implementation and tests were written independently for GPU LayerStyles
+under the project license above; no upstream code is included.
+
+Upstream project: https://github.com/kijai/ComfyUI-KJNodes
+Feature reference: nodes/image_nodes.py (CrossFadeImages)
+Inspected commit: 71b700b5c8be35fd55080de9d6055254f2ff0609
+
 Original algorithm source:
 Christopher Hahne's color-matcher served as the original source for the MKL
 and analytical MVGD algorithms and supplies the development-only numerical

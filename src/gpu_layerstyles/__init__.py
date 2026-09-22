@@ -9,6 +9,7 @@ from .color_correct_brightness_and_contrast import BrightnessContrastV2
 from .color_correct_color_balance import ColorBalance
 from .color_correct_color_temperature import ColorTemperature
 from .color_match import ColorMatch
+from .cross_fade import CrossFade
 from .image_scale_down import ImageScaleDown
 from .slice_image_batch import SliceImageBatch
 
@@ -22,6 +23,7 @@ class GPULayerStylesExtension(ComfyExtension):
             ColorMatch,
             ImageScaleDown,
             SliceImageBatch,
+            CrossFade,
         ]
 
 
