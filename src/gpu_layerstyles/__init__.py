@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
 
-"""Float32 color adjustment and downscaling nodes for ComfyUI."""
+"""Color adjustment, downscaling, and image batch nodes for ComfyUI."""
 
 from comfy_api.latest import ComfyExtension, io
 
@@ -10,6 +10,7 @@ from .color_correct_color_balance import ColorBalance
 from .color_correct_color_temperature import ColorTemperature
 from .color_match import ColorMatch
 from .image_scale_down import ImageScaleDown
+from .slice_image_batch import SliceImageBatch
 
 
 class GPULayerStylesExtension(ComfyExtension):
@@ -20,6 +21,7 @@ class GPULayerStylesExtension(ComfyExtension):
             ColorTemperature,
             ColorMatch,
             ImageScaleDown,
+            SliceImageBatch,
         ]
 
 

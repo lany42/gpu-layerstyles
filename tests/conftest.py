@@ -43,6 +43,15 @@ class ComboInput:
 
 
 @dataclass
+class StringInput:
+    id: str
+    default: str
+    multiline: bool = False
+    dynamic_prompts: bool | None = None
+    tooltip: str | None = None
+
+
+@dataclass
 class Schema:
     node_id: str
     display_name: str
@@ -82,6 +91,7 @@ latest.io = SimpleNamespace(
     Float=SimpleNamespace(Input=NumberInput),
     Int=SimpleNamespace(Input=NumberInput),
     Combo=SimpleNamespace(Input=ComboInput),
+    String=SimpleNamespace(Input=StringInput),
     NodeOutput=NodeOutput,
 )
 comfy.model_management = management

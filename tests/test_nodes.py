@@ -17,28 +17,32 @@ from gpu_layerstyles.color_correct_color_balance import ColorBalance
 from gpu_layerstyles.color_correct_color_temperature import ColorTemperature
 from gpu_layerstyles.color_match import ColorMatch
 from gpu_layerstyles.image_scale_down import ImageScaleDown
+from gpu_layerstyles.slice_image_batch import SliceImageBatch
 
 NODES = [ColorBalance, BrightnessContrastV2, ColorTemperature]
 NEUTRAL = [(0, 0, 0), (1, 1, 1), (0,)]
 ACTIVE = [(0.3, -0.2, 0.4), (1.2, 0.8, 1.3), (-37,)]
 
 
-def test_extension_registers_exactly_five_v3_nodes():
+def test_extension_registers_exactly_six_v3_nodes():
     extension = asyncio.run(comfy_entrypoint())
     assert isinstance(extension, ComfyExtension)
     assert asyncio.run(extension.get_node_list()) == [
         *NODES,
         ColorMatch,
         ImageScaleDown,
+        SliceImageBatch,
     ]
     assert [
-        node.define_schema().node_id for node in [*NODES, ColorMatch, ImageScaleDown]
+        node.define_schema().node_id
+        for node in [*NODES, ColorMatch, ImageScaleDown, SliceImageBatch]
     ] == [
         "GPULayerStyles_ColorBalance",
         "GPULayerStyles_BrightnessContrastV2",
         "GPULayerStyles_ColorTemperature",
         "GPULayerStyles_ColorMatch",
         "GPULayerStyles_ImageScaleDown",
+        "GPULayerStyles_SliceImageBatch",
     ]
 
 
@@ -55,7 +59,10 @@ def test_root_loader_supports_clone_and_zip_installations(monkeypatch):
     extension = asyncio.run(module.comfy_entrypoint())
     assert [
         node.define_schema().node_id for node in asyncio.run(extension.get_node_list())
-    ] == [node.define_schema().node_id for node in [*NODES, ColorMatch, ImageScaleDown]]
+    ] == [
+        node.define_schema().node_id
+        for node in [*NODES, ColorMatch, ImageScaleDown, SliceImageBatch]
+    ]
 
 
 @pytest.mark.parametrize(

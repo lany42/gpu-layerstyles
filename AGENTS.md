@@ -71,30 +71,38 @@ characters; avoid lists and exhaustive change logs.
 
 ## Node behavior and validation
 
-- Register exactly five V3 nodes through `ComfyExtension`, with their existing
+- Register exactly six V3 nodes through `ComfyExtension`, with their existing
   node IDs and control names, order, ranges, steps, and adjustment defaults.
-- Default `output_device` to `"cpu"` in the shared schema, all five node methods,
+- SliceImageBatch accepts an IMAGE and one Python-style index or slice string,
+  defaulting to `":"`. After IMAGE validation, `":"` and `"::"` (ignoring surrounding
+  whitespace) return the original tensor unchanged. For other expressions,
+  reject explicit bounds outside the batch and empty selections before allocating
+  output, then return an independent contiguous batch with the input device,
+  dtype, and pixel values; keep the batch dimension for single images. Use one
+  selection operation without the shared executor, chunking, memory management,
+  retries, or processing controls.
+- Default `output_device` to `"cpu"` in the shared schema, the five processing nodes,
   and the executor; retain option order `["gpu", "cpu"]`. CPU output still processes
   chunks on ComfyUI's selected compute device and copies them into a preallocated
   CPU destination. Explicit GPU output stays on the selected compute device.
-- Keep `batch_size=0` as the default and start automatic chunks at
+- For the five processing nodes, keep `batch_size=0` and start automatic chunks at
   `min(input_frame_count, 64)`. Positive sizes are capped only by input length and
   can exceed 64. On allocation failure, release failed temporaries, halve the
   failing chunk count to a minimum of one, and retry the same frames. Keep the
   reduced size for the rest of that invocation; start fresh on the next invocation.
-- Process RGB in float32 and leave input tensors untouched. Color nodes preserve
-  alpha unchanged. ImageScaleDown filters premultiplied RGB and alpha, restores
-  straight RGBA, and clamps only the final resize. Keep contrast statistics local
-  to each frame and skip neutral adjustments.
+- The five processing nodes use float32 RGB and leave input tensors untouched.
+  Color nodes preserve alpha unchanged. ImageScaleDown filters premultiplied RGB
+  and alpha, restores straight RGBA, and clamps only the final resize. Keep
+  contrast statistics local to each frame and skip neutral adjustments.
 - ImageScaleDown accepts exact positive integer dimensions and rejects either
   dimension exceeding the source. Bicubic uses Torch antialiasing with
   `align_corners=False`; Lanczos-3 follows Pillow's floating-point filter and
   boundary normalization. Keep gather buffers bounded and coefficients local to
   the invocation. Unchanged sizes return a float32 copy without filtering or
   clamping. Keep Pillow's source attribution and license notices in distributions.
-- Ask ComfyUI to free memory before allocating working space and outputs,
-  accounting for all inputs and the output device. Preserve output placement,
-  allocation retries, clear memory errors, cancellation, and progress.
+- In the shared executor, ask ComfyUI to free memory before allocating working
+  space and outputs, accounting for all inputs and the output device. Preserve
+  output placement, allocation retries, clear memory errors, cancellation, and progress.
 - Preserve ColorMatch's documented methods and reference requirements. Validate
   its public behavior and compare representative images against upstream, allowing
   minor float32 numerical differences.

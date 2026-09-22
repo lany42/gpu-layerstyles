@@ -10,6 +10,14 @@ and ImageScaleDown implementations, ComfyUI loader, and tests, is licensed
 under AGPL-3.0-only. The adapted Lanczos algorithm retains the upstream
 attribution and notices below.
 
+Batch selection feature inspiration:
+SliceImageBatch was inspired by VideoHelperSuite's image selection node. Its
+strict Python-style slicing implementation and tests were written independently
+for GPU LayerStyles under the project license above; no upstream code is included.
+
+Upstream project: https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite
+Feature reference: videohelpersuite/image_latent_nodes.py and videohelpersuite/utils.py
+
 Original algorithm source:
 Christopher Hahne's color-matcher served as the original source for the MKL
 and analytical MVGD algorithms and supplies the development-only numerical
