@@ -12,6 +12,8 @@ from .nodes.color_match import ColorMatch
 from .nodes.cross_fade import CrossFade
 from .nodes.image_scale_down import ImageScaleDown
 from .nodes.slice_image_batch import SliceImageBatch
+from .nodes.two_batch_bridge import TwoBatchBridge
+from .nodes.two_batch_loop import TwoBatchLoop
 
 
 class GPULayerStylesExtension(ComfyExtension):
@@ -24,6 +26,8 @@ class GPULayerStylesExtension(ComfyExtension):
             ImageScaleDown,
             SliceImageBatch,
             CrossFade,
+            TwoBatchLoop,
+            TwoBatchBridge,
         ]
 
 

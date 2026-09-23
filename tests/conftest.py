@@ -43,6 +43,14 @@ class ComboInput:
 
 
 @dataclass
+class BooleanInput:
+    id: str
+    default: bool
+    display_name: str | None = None
+    tooltip: str | None = None
+
+
+@dataclass
 class StringInput:
     id: str
     default: str
@@ -90,6 +98,7 @@ latest.io = SimpleNamespace(
     Image=SimpleNamespace(Input=ImageInput, Output=ImageOutput),
     Float=SimpleNamespace(Input=NumberInput),
     Int=SimpleNamespace(Input=NumberInput),
+    Boolean=SimpleNamespace(Input=BooleanInput),
     Combo=SimpleNamespace(Input=ComboInput),
     String=SimpleNamespace(Input=StringInput),
     NodeOutput=NodeOutput,
