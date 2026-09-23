@@ -5,13 +5,13 @@
 
 from comfy_api.latest import ComfyExtension, io
 
-from .color_correct_brightness_and_contrast import BrightnessContrastV2
-from .color_correct_color_balance import ColorBalance
-from .color_correct_color_temperature import ColorTemperature
-from .color_match import ColorMatch
-from .cross_fade import CrossFade
-from .image_scale_down import ImageScaleDown
-from .slice_image_batch import SliceImageBatch
+from .nodes.color_correct_brightness_and_contrast import BrightnessContrastV2
+from .nodes.color_correct_color_balance import ColorBalance
+from .nodes.color_correct_color_temperature import ColorTemperature
+from .nodes.color_match import ColorMatch
+from .nodes.cross_fade import CrossFade
+from .nodes.image_scale_down import ImageScaleDown
+from .nodes.slice_image_batch import SliceImageBatch
 
 
 class GPULayerStylesExtension(ComfyExtension):

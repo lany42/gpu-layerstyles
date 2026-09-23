@@ -10,8 +10,9 @@ from numbers import Real
 import torch
 from comfy_api.latest import io
 
-from ._color_match import color_match, prepare_reference
-from ._execution import execution_inputs, process_image_pair
+from .._color_match import color_match, prepare_reference
+from .._exec.inputs import execution_inputs
+from .._exec.pair import process_image_pair
 
 
 class ColorMatch(io.ComfyNode):

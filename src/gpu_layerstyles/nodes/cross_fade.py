@@ -6,7 +6,8 @@
 import torch
 from comfy_api.latest import io
 
-from ._execution import execution_inputs, process_image_crossfade
+from .._exec.crossfade import process_image_crossfade
+from .._exec.inputs import execution_inputs
 
 
 class CrossFade(io.ComfyNode):

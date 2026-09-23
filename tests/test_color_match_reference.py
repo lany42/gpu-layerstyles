@@ -21,7 +21,7 @@ from color_matcher import ColorMatcher
 from PIL import Image
 
 from gpu_layerstyles._color_match import match_rgb, prepare_reference
-from gpu_layerstyles.color_match import ColorMatch
+from gpu_layerstyles.nodes.color_match import ColorMatch
 
 # Allow minor numerical differences: about 0.13 of one 8-bit channel level.
 MAX_ABSOLUTE_ERROR = 5e-4

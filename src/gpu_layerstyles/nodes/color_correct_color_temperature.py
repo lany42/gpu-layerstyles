@@ -8,8 +8,9 @@ from functools import partial
 import torch
 from comfy_api.latest import io
 
-from ._color import color_temperature
-from ._execution import execution_inputs, process_image
+from .._color import color_temperature
+from .._exec.image import process_image
+from .._exec.inputs import execution_inputs
 
 
 class ColorTemperature(io.ComfyNode):

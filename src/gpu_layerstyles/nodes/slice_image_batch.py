@@ -8,7 +8,7 @@ import re
 import torch
 from comfy_api.latest import io
 
-from ._execution import _validate_image
+from .._exec.core import _validate_image
 
 
 def _parse_selection(expression: str, length: int) -> range:

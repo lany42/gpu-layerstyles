@@ -9,8 +9,9 @@ from itertools import accumulate
 import pytest
 import torch
 
-from gpu_layerstyles import _execution, _resize
-from gpu_layerstyles.image_scale_down import ImageScaleDown
+from gpu_layerstyles import _resize
+from gpu_layerstyles._exec import core
+from gpu_layerstyles.nodes.image_scale_down import ImageScaleDown
 
 from .conftest import InterruptProcessingException
 
@@ -126,7 +127,7 @@ def test_lanczos_oom_retries_same_frames_reuses_coefficients_and_restarts_fresh(
     monkeypatch.setattr(_resize.ImageResizer, "__call__", observe)
     monkeypatch.setattr(_resize, "_resample_axis", axis)
     monkeypatch.setattr(_resize, "_lanczos_coefficients", coefficients)
-    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
     output = ImageScaleDown.execute(image, 3, 2, "lanczos").result[0]
     assert attempts == [
         (0, 64),
@@ -181,7 +182,7 @@ def test_oom_during_coefficient_preparation_releases_partial_tables(
         runtime.cache_clears += 1
 
     monkeypatch.setattr(_resize, "_lanczos_coefficients", coefficients)
-    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
     image = torch.full((7, 7, 11, 3), 0.5001)
     output = ImageScaleDown.execute(image, 3, 2, "lanczos").result[0]
     assert calls == 4

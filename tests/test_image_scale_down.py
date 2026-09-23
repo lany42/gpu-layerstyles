@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from comfy_api.latest import io
 
 from gpu_layerstyles import _resize
-from gpu_layerstyles.image_scale_down import ImageScaleDown
+from gpu_layerstyles.nodes.image_scale_down import ImageScaleDown
 
 
 def test_schema_and_defaults():

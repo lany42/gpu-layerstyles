@@ -9,7 +9,7 @@ import pytest
 import torch
 from comfy_api.latest import io
 
-from gpu_layerstyles.slice_image_batch import SliceImageBatch
+from gpu_layerstyles.nodes.slice_image_batch import SliceImageBatch
 
 
 def test_schema_and_defaults():

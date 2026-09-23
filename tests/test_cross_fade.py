@@ -9,7 +9,7 @@ import pytest
 import torch
 from comfy_api.latest import io
 
-from gpu_layerstyles.cross_fade import CrossFade
+from gpu_layerstyles.nodes.cross_fade import CrossFade
 
 
 def test_schema_and_execute_contract():

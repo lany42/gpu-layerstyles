@@ -9,7 +9,7 @@ import pytest
 import torch
 from comfy_api.latest import io
 
-from gpu_layerstyles.color_match import ColorMatch
+from gpu_layerstyles.nodes.color_match import ColorMatch
 
 
 def test_schema_and_execute_contract():

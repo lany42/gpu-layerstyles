@@ -112,7 +112,7 @@ sys.modules.update(
 
 @pytest.fixture(autouse=True)
 def runtime(monkeypatch):
-    from gpu_layerstyles import _execution
+    from gpu_layerstyles._exec import core
 
     state = SimpleNamespace(
         device=torch.device("cpu"),
@@ -166,7 +166,7 @@ def runtime(monkeypatch):
         check_interrupt,
         raising=False,
     )
-    monkeypatch.setattr(_execution, "ProgressBar", ProgressBar)
+    monkeypatch.setattr(core, "ProgressBar", ProgressBar)
     return state
 
 

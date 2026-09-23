@@ -7,8 +7,8 @@ from itertools import accumulate
 import pytest
 import torch
 
-from gpu_layerstyles import _execution
-from gpu_layerstyles._execution import process_image
+from gpu_layerstyles._exec import core
+from gpu_layerstyles._exec.image import process_image
 
 from .conftest import InterruptProcessingException
 
@@ -124,7 +124,7 @@ def test_oom_halves_chunk_size_retries_same_frames_and_releases_temporaries(
         assert all(reference() is None for reference in failed_tensors)
         runtime.cache_clears += 1
 
-    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
     result = process_image(image, operation, batch_size=batch_size)
     assert calls == [7, 3, *([1] * 7)]
     assert runtime.cache_clears == 2
@@ -156,7 +156,7 @@ def test_automatic_oom_retries_64_32_16_and_restarts_fresh(
         assert all(reference() is None for reference in failed_tensors)
         runtime.cache_clears += 1
 
-    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
     options = {} if output_device is None else {"output_device": output_device}
     result = process_image(image, operation, **options)
     assert calls == [

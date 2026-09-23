@@ -11,7 +11,7 @@ import torch
 from PIL import Image
 
 from gpu_layerstyles import _resize
-from gpu_layerstyles.image_scale_down import ImageScaleDown
+from gpu_layerstyles.nodes.image_scale_down import ImageScaleDown
 
 
 def pillow_resize(image, width, height):

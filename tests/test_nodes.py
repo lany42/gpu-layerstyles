@@ -12,13 +12,15 @@ import torch
 from comfy_api.latest import ComfyExtension, io
 
 from gpu_layerstyles import comfy_entrypoint
-from gpu_layerstyles.color_correct_brightness_and_contrast import BrightnessContrastV2
-from gpu_layerstyles.color_correct_color_balance import ColorBalance
-from gpu_layerstyles.color_correct_color_temperature import ColorTemperature
-from gpu_layerstyles.color_match import ColorMatch
-from gpu_layerstyles.cross_fade import CrossFade
-from gpu_layerstyles.image_scale_down import ImageScaleDown
-from gpu_layerstyles.slice_image_batch import SliceImageBatch
+from gpu_layerstyles.nodes.color_correct_brightness_and_contrast import (
+    BrightnessContrastV2,
+)
+from gpu_layerstyles.nodes.color_correct_color_balance import ColorBalance
+from gpu_layerstyles.nodes.color_correct_color_temperature import ColorTemperature
+from gpu_layerstyles.nodes.color_match import ColorMatch
+from gpu_layerstyles.nodes.cross_fade import CrossFade
+from gpu_layerstyles.nodes.image_scale_down import ImageScaleDown
+from gpu_layerstyles.nodes.slice_image_batch import SliceImageBatch
 
 NODES = [ColorBalance, BrightnessContrastV2, ColorTemperature]
 NEUTRAL = [(0, 0, 0), (1, 1, 1), (0,)]

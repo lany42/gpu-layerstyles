@@ -9,8 +9,8 @@ from itertools import accumulate
 import pytest
 import torch
 
-from gpu_layerstyles import _execution
-from gpu_layerstyles.cross_fade import CrossFade
+from gpu_layerstyles._exec import core, crossfade
+from gpu_layerstyles.nodes.cross_fade import CrossFade
 
 from .conftest import InterruptProcessingException
 
@@ -102,7 +102,7 @@ def test_oom_during_second_input_transfer_retries_seams_and_restarts_fresh(
         :, None, None, None
     ].expand(-1, 2, 3, 4)
     before = first.clone(), second.clone()
-    original_process = _execution._process_crossfade_chunk
+    original_process = crossfade._process_crossfade_chunk
     original_to = torch.Tensor.to
     attempts, converted = [], []
     fail = True
@@ -127,9 +127,9 @@ def test_oom_during_second_input_transfer_retries_seams_and_restarts_fresh(
         assert converted and all(reference() is None for reference in converted)
         runtime.cache_clears += 1
 
-    monkeypatch.setattr(_execution, "_process_crossfade_chunk", process)
+    monkeypatch.setattr(crossfade, "_process_crossfade_chunk", process)
     monkeypatch.setattr(torch.Tensor, "to", to)
-    monkeypatch.setattr(_execution.model_management, "soft_empty_cache", empty_cache)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
     output = CrossFade.execute(first, second, 70, 73).result[0]
     assert attempts == [
         (0, 64),
