@@ -5,6 +5,7 @@
 
 from comfy_api.latest import ComfyExtension, io
 
+from .nodes.batch_concat import BatchConcat
 from .nodes.color_correct_brightness_and_contrast import BrightnessContrastV2
 from .nodes.color_correct_color_balance import ColorBalance
 from .nodes.color_correct_color_temperature import ColorTemperature
@@ -25,6 +26,7 @@ class GPULayerStylesExtension(ComfyExtension):
             ColorMatch,
             ImageScaleDown,
             SliceImageBatch,
+            BatchConcat,
             CrossFade,
             TwoBatchLoop,
             TwoBatchBridge,

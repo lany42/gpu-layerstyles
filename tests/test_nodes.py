@@ -12,6 +12,7 @@ import torch
 from comfy_api.latest import ComfyExtension, io
 
 from gpu_layerstyles import comfy_entrypoint
+from gpu_layerstyles.nodes.batch_concat import BatchConcat
 from gpu_layerstyles.nodes.color_correct_brightness_and_contrast import (
     BrightnessContrastV2,
 )
@@ -29,7 +30,7 @@ NEUTRAL = [(0, 0, 0), (1, 1, 1), (0,)]
 ACTIVE = [(0.3, -0.2, 0.4), (1.2, 0.8, 1.3), (-37,)]
 
 
-def test_extension_registers_exactly_nine_v3_nodes():
+def test_extension_registers_exactly_ten_v3_nodes():
     extension = asyncio.run(comfy_entrypoint())
     assert isinstance(extension, ComfyExtension)
     assert asyncio.run(extension.get_node_list()) == [
@@ -37,6 +38,7 @@ def test_extension_registers_exactly_nine_v3_nodes():
         ColorMatch,
         ImageScaleDown,
         SliceImageBatch,
+        BatchConcat,
         CrossFade,
         TwoBatchLoop,
         TwoBatchBridge,
@@ -48,6 +50,7 @@ def test_extension_registers_exactly_nine_v3_nodes():
             ColorMatch,
             ImageScaleDown,
             SliceImageBatch,
+            BatchConcat,
             CrossFade,
             TwoBatchLoop,
             TwoBatchBridge,
@@ -59,6 +62,7 @@ def test_extension_registers_exactly_nine_v3_nodes():
         "GPULayerStyles_ColorMatch",
         "GPULayerStyles_ImageScaleDown",
         "GPULayerStyles_SliceImageBatch",
+        "GPULayerStyles_BatchConcat",
         "GPULayerStyles_CrossFade",
         "GPULayerStyles_TwoBatchLoop",
         "GPULayerStyles_TwoBatchBridge",
@@ -85,6 +89,7 @@ def test_root_loader_supports_clone_and_zip_installations(monkeypatch):
             ColorMatch,
             ImageScaleDown,
             SliceImageBatch,
+            BatchConcat,
             CrossFade,
             TwoBatchLoop,
             TwoBatchBridge,

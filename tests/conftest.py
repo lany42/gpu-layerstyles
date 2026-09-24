@@ -17,6 +17,21 @@ import torch
 @dataclass
 class ImageInput:
     id: str
+    tooltip: str | None = None
+
+
+@dataclass
+class AutogrowTemplateNames:
+    input: ImageInput
+    names: list[str]
+    min: int = 1
+
+
+@dataclass
+class AutogrowInput:
+    id: str
+    template: AutogrowTemplateNames
+    tooltip: str | None = None
 
 
 @dataclass
@@ -96,6 +111,7 @@ latest.io = SimpleNamespace(
     ComfyNode=ComfyNode,
     Schema=Schema,
     Image=SimpleNamespace(Input=ImageInput, Output=ImageOutput),
+    Autogrow=SimpleNamespace(Input=AutogrowInput, TemplateNames=AutogrowTemplateNames),
     Float=SimpleNamespace(Input=NumberInput),
     Int=SimpleNamespace(Input=NumberInput),
     Boolean=SimpleNamespace(Input=BooleanInput),
