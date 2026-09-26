@@ -1,3 +1,5 @@
+If a push is requested, only push to `origin`. Never push to a mirror remote unless the user explicitly overrides this rule.
+
 Do NOT update the README unless explicitly requested.
 
 # Development workflow

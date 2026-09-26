@@ -1,5 +1,7 @@
 # GPU LayerStyles
 
+The canonical home of this repository is at https://git.colorized.life/gpu-layerstyles/
+
 Five ComfyUI nodes for GPU-accelerated, float32 color adjustments, matching,
 and image downscaling.
 
