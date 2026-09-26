@@ -1,6 +1,6 @@
 [project]
 name = "gpu-layerstyles"
-version = "1.4.0"
+version = "1.4.1"
 description = "Batch-capable GPU layerstyle nodes for ComfyUI."
 readme = "README.md"
 authors = [
@@ -23,6 +23,7 @@ Homepage = "https://git.colorized.life/gpu-layerstyles/"
 
 [tool.comfy]
 PublisherId = "lany-atwood"
+DisplayName = "GPU LayerStyles"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
