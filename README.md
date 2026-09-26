@@ -2,8 +2,8 @@
 
 The canonical home of this repository is at https://git.colorized.life/gpu-layerstyles/
 
-Five ComfyUI nodes for GPU-accelerated, float32 color adjustments, matching,
-and image downscaling.
+Ten ComfyUI nodes for GPU-accelerated, float32 color adjustments, matching,
+and image downscaling, plus image batch selection, concatenation, and transitions.
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
@@ -13,13 +13,21 @@ git clone https://git.colorized.life/gpu-layerstyles.git gpu-layerstyles
 
 ## Nodes
 
-| Display name | Node ID | Adjustment controls, in order |
-| --- | --- | --- |
-| GPU LayerStyles ColorBalance | `GPULayerStyles_ColorBalance` | `cyan_red`, `magenta_green`, `yellow_blue` |
-| GPU LayerStyles Brightness Contrast V2 | `GPULayerStyles_BrightnessContrastV2` | `brightness`, `contrast`, `saturation` |
-| GPU LayerStyles ColorTemperature | `GPULayerStyles_ColorTemperature` | `temperature` |
-| GPU LayerStyles ColorMatch | `GPULayerStyles_ColorMatch` | `image_ref`, `method`, `strength` |
-| GPU LayerStyles ImageScaleDown | `GPULayerStyles_ImageScaleDown` | `width`, `height`, `method` |
+| Display name | Node ID | Inputs and controls, in order | Outputs and behavior |
+| --- | --- | --- | --- |
+| GPU LayerStyles ColorBalance | `GPULayerStyles_ColorBalance` | `image`, `cyan_red`, `magenta_green`, `yellow_blue`, execution controls | `image`: balance RGB while preserving luminosity. |
+| GPU LayerStyles Brightness Contrast V2 | `GPULayerStyles_BrightnessContrastV2` | `image`, `brightness`, `contrast`, `saturation`, execution controls | `image`: adjust brightness, per-frame contrast, then saturation. |
+| GPU LayerStyles ColorTemperature | `GPULayerStyles_ColorTemperature` | `image`, `temperature`, execution controls | `image`: negative values warm; positive values cool. |
+| GPU LayerStyles ColorMatch | `GPULayerStyles_ColorMatch` | `image`, `image_ref`, `method`, `strength`, execution controls | `image`: match RGB to the reference using MKL or MVGD; preserve target alpha. |
+| GPU LayerStyles ImageScaleDown | `GPULayerStyles_ImageScaleDown` | `image`, `width`, `height`, `method`, execution controls | `image`: downscale to exact dimensions with bicubic or Lanczos-3 filtering. |
+| GPU LayerStyles SliceImageBatch | `GPULayerStyles_SliceImageBatch` | `image`, `slice` | `image`: select frames with an index or `START:END[:STRIDE]`; negative indices and reverse strides are supported. |
+| GPU LayerStyles BatchConcat | `GPULayerStyles_BatchConcat` | `images`: growing sockets `image_1` through `image_100` | `image`: concatenate connected images or batches in socket order; dimensions, dtype, and device must match. |
+| GPU LayerStyles CrossFade | `GPULayerStyles_CrossFade` | `images_1`, `images_2`, `start_index`, `frames`, execution controls | `image`: keep the first batch's prefix, fade into the second batch over `frames`, then keep the rest of the second batch. |
+| GPU LayerStyles TwoBatchLoop | `GPULayerStyles_TwoBatchLoop` | `images_1`, `images_2`, `blend_target`, `append_first_frame`, execution controls | `images`: crossfade both batch boundaries into a loop; optionally append its first frame. Each input needs at least `2 * blend_target + 1` frames. |
+| GPU LayerStyles TwoBatchBridge | `GPULayerStyles_TwoBatchBridge` | `images`, `blend_target` | `bridge_first`: last `blend_target` frames; `bridge_last`: first `blend_target` frames; `first/last`: first frame of `bridge_first`, then last frame of `bridge_last`. |
+
+Execution controls are `output_device`, then `batch_size`. All outputs are IMAGE
+batches; multiple outputs are listed in socket order.
 
 ## Performance
 
