@@ -7,7 +7,12 @@ from collections.abc import Callable
 
 import torch
 
-from .core import _WORKING_MULTIPLIER, _execute, _validate_image
+from .core import (
+    _WORKING_MULTIPLIER,
+    _clear_exception_frames,
+    _execute,
+    _validate_image,
+)
 
 ColorOperation = Callable[[torch.Tensor], torch.Tensor]
 
@@ -45,10 +50,14 @@ def process_image(
         )
 
     frame_bytes = image[0].numel() * 4
-    return _execute(
-        image,
-        process_chunk,
-        lambda count: _WORKING_MULTIPLIER * count * frame_bytes,
-        output_device,
-        batch_size,
-    )
+    try:
+        return _execute(
+            image,
+            process_chunk,
+            lambda count: _WORKING_MULTIPLIER * count * frame_bytes,
+            output_device,
+            batch_size,
+        )
+    except BaseException as error:
+        _clear_exception_frames(error)
+        raise
