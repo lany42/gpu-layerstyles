@@ -2,7 +2,7 @@
 
 These two RGB PNGs (481×361 pixels each) are copied byte-for-byte from
 `tests/data/` in Christopher Hahne's **color-matcher 0.6.0** wheel, published
-March 30, 2025. They are used at full resolution.
+March 30, 2025. They are loaded unchanged at full resolution.
 
 - [PyPI release and published hashes](https://pypi.org/project/color-matcher/0.6.0/#files)
 - [Source wheel](https://files.pythonhosted.org/packages/a0/3a/f3c2c5012f59235ff5885db7cc75dc209eca90e42ae3728db56f8a9e28a4/color_matcher-0.6.0-py3-none-any.whl)
@@ -43,10 +43,12 @@ See [COPYRIGHT](../../../COPYRIGHT) for the project and original-source attribut
 `tests/test_color_match_reference.py` uses the house and landscape photographs
 from upstream's test suite in two transfers: house to landscape at full strength,
 and landscape to house at half strength. Both MKL and analytical MVGD are checked.
+MKL is also checked from the house to a 6×7-pixel landscape crop, covering a
+reference at a different resolution from the target.
 
 Both implementations receive the same ordinary interleaved float32 `uint8 / 255`
 inputs, with the method selected in the `ColorMatcher` constructor. Tests compare
-raw matching and final blended/clipped node output directly against the library.
+the final blended/clipped node output directly against the library.
 The absolute tolerance is `0.0005` per channel (`rtol=0`), about `0.13` on a 0–255
 scale, allowing minor numerical differences in these practical comparisons.
 

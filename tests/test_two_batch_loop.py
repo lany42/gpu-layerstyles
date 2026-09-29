@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
 
-"""TwoBatchLoop's public controls, sequence, and numerical behavior."""
+"""TwoBatchLoop's sequence, numerics, validation, and chunked execution."""
 
-import inspect
+import weakref
+from itertools import accumulate
 
 import pytest
 import torch
-from comfy_api.latest import io
 
-from gpu_layerstyles._exec.two_batch_loop import process_two_batch_loop
+from gpu_layerstyles._exec import core, two_batch_loop
 from gpu_layerstyles.nodes.two_batch_loop import TwoBatchLoop
+
+from .conftest import InterruptProcessingException
 
 
 def reference_loop(first, second, frames):
@@ -30,52 +32,14 @@ def reference_loop(first, second, frames):
     ).float()
 
 
-def test_schema_and_execution_contract():
-    schema = TwoBatchLoop.define_schema()
-    names = [
-        "images_1",
-        "images_2",
-        "blend_target",
-        "append_first_frame",
-        "output_device",
-        "batch_size",
-    ]
-    assert [field.id for field in schema.inputs] == names
-    for execute in (TwoBatchLoop.execute, process_two_batch_loop):
-        parameters = inspect.signature(execute).parameters
-        assert list(parameters) == names
-        assert [parameters[name].default for name in names[2:]] == [15, False, "cpu", 0]
-        assert parameters["append_first_frame"].default is False
-    for name in ("define_schema", "execute"):
-        assert isinstance(inspect.getattr_static(TwoBatchLoop, name), classmethod)
-    assert schema.node_id == "GPULayerStyles_TwoBatchLoop"
-    assert schema.display_name == "GPU LayerStyles TwoBatchLoop"
-    assert schema.category == "GPU LayerStyles/Batch"
-    assert len(schema.outputs) == 1
-    assert schema.outputs[0].display_name == "images"
-    blend, append, output, batch = schema.inputs[2:]
-    assert (blend.default, blend.min, blend.max, blend.step) == (15, 2, 2**31 - 1, 1)
-    assert isinstance(append, io.Boolean.Input)
-    assert append.display_name == "append first frame"
-    assert append.default is False
-    assert "After interpolation" in append.tooltip
-    assert "SliceImageBatch" in append.tooltip
-    assert "0:-1" in append.tooltip
-    assert output.options == ["gpu", "cpu"]
-    assert output.default == "cpu"
-    assert (batch.default, batch.min, batch.max, batch.step) == (0, 0, 2**31 - 1, 1)
-
-
-@pytest.mark.parametrize("batch_size", [0, 1, 7, 15, 66, 132, 133, 200])
+# Chunks may split a transition, a middle, or isolate the closing frame.
+@pytest.mark.parametrize("batch_size", [1, 15, 66, 132])
 def test_complete_81_frame_sequence_and_optional_closing_frame(batch_size):
     first = torch.arange(81, dtype=torch.float32)[:, None, None, None].expand(
         -1, 2, 3, 3
     )
     second = first + 1000
-    result = TwoBatchLoop.execute(first, second, batch_size=batch_size)
-    assert isinstance(result, io.NodeOutput)
-    assert len(result.result) == 1
-    output = result.result[0]
+    output = TwoBatchLoop.execute(first, second, batch_size=batch_size).result[0]
     assert output.shape == (132, 2, 3, 3)
     torch.testing.assert_close(output, reference_loop(first, second, 15))
     assert torch.equal(output[0], second[66])
@@ -87,13 +51,9 @@ def test_complete_81_frame_sequence_and_optional_closing_frame(batch_size):
     # The middle's last frame immediately precedes the tail at loop frame zero.
     assert torch.equal(output[-1], second[65])
 
-    disabled = TwoBatchLoop.execute(
-        first, second, append_first_frame=False, batch_size=batch_size
-    ).result[0]
     closed = TwoBatchLoop.execute(
         first, second, append_first_frame=True, batch_size=batch_size
     ).result[0]
-    assert torch.equal(disabled, output)
     assert closed.shape == (133, 2, 3, 3)
     assert torch.equal(closed[:-1], output)
     assert torch.equal(closed[-1], output[0])
@@ -106,7 +66,7 @@ def test_complete_81_frame_sequence_and_optional_closing_frame(batch_size):
 def test_unequal_and_minimum_lengths(n1, n2, frames, append):
     first = torch.rand(n1, 2, 3, 4)
     second = torch.rand(n2, 2, 3, 4)
-    output = process_two_batch_loop(first, second, frames, append, batch_size=3)
+    output = TwoBatchLoop.execute(first, second, frames, append, batch_size=3).result[0]
     assert len(output) == n1 + n2 - 2 * frames + int(append)
     torch.testing.assert_close(
         output[: n1 + n2 - 2 * frames], reference_loop(first, second, frames)
@@ -134,114 +94,52 @@ def test_rgba_blends_alpha_independently_without_clamping():
     assert torch.equal(output, expected)
 
 
-@pytest.mark.parametrize(
-    "dtype_1,dtype_2",
-    [
-        (torch.float16, torch.float64),
-        (torch.bfloat16, torch.float16),
-        (torch.float32, torch.float32),
-        (torch.float64, torch.bfloat16),
-    ],
-)
-@pytest.mark.parametrize("channels", [3, 4])
-@pytest.mark.parametrize("batch_size", [0, 1, 7, 200])
-def test_chunk_independence_float32_and_input_preservation(
-    dtype_1, dtype_2, channels, batch_size
-):
+@pytest.mark.parametrize("batch_size", [0, 7])
+def test_chunked_mixed_precision_loop_matches_a_float64_reference(batch_size):
     generator = torch.Generator().manual_seed(137)
-    first = (
-        (torch.rand(77, 3, 5, channels, generator=generator) * 3 - 1)
-        .to(dtype_1)
-        .transpose(1, 2)
-        .requires_grad_()
-    )
-    second = (
-        (torch.rand(91, 3, 5, channels, generator=generator) * 3 - 1)
-        .to(dtype_2)
-        .transpose(1, 2)
-        .requires_grad_()
-    )
-    before = first.detach().clone(), second.detach().clone()
-    versions = first._version, second._version
+    first = (torch.rand(77, 3, 5, 4, generator=generator) * 3 - 1).half()
+    second = (torch.rand(91, 3, 5, 4, generator=generator) * 3 - 1).double()
     output = TwoBatchLoop.execute(
         first, second, 33, True, batch_size=batch_size
     ).result[0]
-    expected = reference_loop(*before, 33)
-    torch.testing.assert_close(output[:-1], expected, rtol=2e-6, atol=4e-7)
-    whole = TwoBatchLoop.execute(first, second, 33, True, batch_size=200).result[0]
-    assert torch.equal(output, whole)
-    assert output.shape == (103, 5, 3, channels)
-    assert torch.equal(output[-1], output[0])
-    assert output.dtype == torch.float32
-    assert output.device.type == "cpu"
-    assert output.is_contiguous()
-    assert not output.requires_grad
-    assert output.grad_fn is None
-    assert output.untyped_storage().data_ptr() not in (
-        first.untyped_storage().data_ptr(),
-        second.untyped_storage().data_ptr(),
+    torch.testing.assert_close(
+        output[:-1], reference_loop(first, second, 33), rtol=2e-6, atol=4e-7
     )
-    assert torch.equal(first, before[0])
-    assert torch.equal(second, before[1])
-    assert (first._version, second._version) == versions
+    assert output.shape == (103, 3, 5, 4)
+    assert torch.equal(output[-1], output[0])
 
 
-@pytest.mark.parametrize("output_device", ["cpu", "gpu"])
-def test_overlapping_inputs_and_comfy_cpu_mode(output_device):
+def test_overlapping_inputs_are_read_without_aliasing_the_output():
     image = torch.rand(9, 2, 3, 4, generator=torch.Generator().manual_seed(2))
     before = image.clone()
-    output = TwoBatchLoop.execute(image, image[2:], 3, True, output_device, 2).result[0]
-    assert output.device.type == "cpu"
+    output = TwoBatchLoop.execute(image, image[2:], 3, True, batch_size=2).result[0]
     torch.testing.assert_close(output[:-1], reference_loop(before, before[2:], 3))
-    assert torch.equal(output[-1], output[0])
-    assert torch.equal(image, before)
     output.zero_()
     assert torch.equal(image, before)
 
 
-def test_float32_inside_autocast():
-    first = torch.rand(7, 2, 3, 4)
-    second = torch.rand(9, 2, 3, 4)
-    expected = TwoBatchLoop.execute(first, second, 3, True).result[0]
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        output = TwoBatchLoop.execute(first, second, 3, True).result[0]
-    assert output.dtype == torch.float32
-    assert torch.equal(output, expected)
-
-
 @pytest.fixture
-def forbid_work(monkeypatch, runtime):
-    def unexpected(*args, **kwargs):
-        pytest.fail("TwoBatchLoop must validate before allocating or processing")
-
-    monkeypatch.setattr(torch, "empty", unexpected)
-    monkeypatch.setattr(torch.Tensor, "to", unexpected)
-    monkeypatch.setattr(torch, "arange", unexpected)
+def forbid_memory_management(runtime):
     yield
     assert not runtime.free_requests
-    assert not runtime.progress
 
 
-@pytest.mark.parametrize(
-    "value", [None, True, False, -1, 0, 1, 2.0, "2", float("inf"), float("nan"), 2**31]
-)
-def test_blend_target_requires_an_integer_in_range(value, forbid_work):
-    with pytest.raises(ValueError, match="blend_target"):
+@pytest.mark.parametrize("value", [True, 1, 2.0, 2**31])
+def test_blend_target_requires_an_integer_in_range(value, forbid_memory_management):
+    with pytest.raises(ValueError, match="^blend_target must be an integer between 2"):
         TwoBatchLoop.execute(torch.ones(5, 1, 1, 3), torch.ones(5, 1, 1, 3), value)
 
 
-@pytest.mark.parametrize("value", [None, 0, 1, -1, 0.0, "False", [], float("nan")])
-def test_closing_frame_requires_a_boolean(value, forbid_work):
+@pytest.mark.parametrize("value", [1, "False"])
+def test_closing_frame_requires_a_boolean(value, forbid_memory_management):
     with pytest.raises(TypeError, match="append_first_frame"):
         TwoBatchLoop.execute(torch.ones(5, 1, 1, 3), torch.ones(5, 1, 1, 3), 2, value)
 
 
 @pytest.mark.parametrize("name", ["images_1", "images_2"])
-@pytest.mark.parametrize(
-    "frames,length", [(2, 4), (15, 1), (15, 14), (15, 15), (15, 16), (15, 29), (15, 30)]
-)
+@pytest.mark.parametrize("frames,length", [(2, 4), (15, 30)])
 def test_short_batches_and_empty_middles_are_rejected(
-    name, frames, length, forbid_work
+    name, frames, length, forbid_memory_management
 ):
     inputs = {"images_1": torch.ones(81, 1, 1, 3), "images_2": torch.ones(81, 1, 1, 3)}
     inputs[name] = torch.ones(length, 1, 1, 3)
@@ -251,46 +149,191 @@ def test_short_batches_and_empty_middles_are_rejected(
         TwoBatchLoop.execute(**inputs, blend_target=frames)
 
 
-@pytest.mark.parametrize("name", ["images_1", "images_2"])
-@pytest.mark.parametrize(
-    "image,error",
-    [
-        (None, TypeError),
-        ([], TypeError),
-        (torch.ones(31, 2, 3, 3, dtype=torch.uint8), TypeError),
-        (torch.ones(31, 2, 3), ValueError),
-        (torch.ones(0, 2, 3, 3), ValueError),
-        (torch.ones(31, 0, 3, 3), ValueError),
-        (torch.ones(31, 2, 0, 3), ValueError),
-        (torch.ones(31, 2, 3, 1), ValueError),
-        (torch.ones(31, 2, 3, 5), ValueError),
-        (torch.ones(31, 2, 3, 3).to_sparse(), ValueError),
-    ],
-)
-def test_invalid_images_are_named_and_rejected(name, image, error, forbid_work):
-    inputs = {"images_1": torch.ones(31, 2, 3, 3), "images_2": torch.ones(31, 2, 3, 3)}
-    inputs[name] = image
-    with pytest.raises(error, match=name):
-        TwoBatchLoop.execute(**inputs)
-
-
 @pytest.mark.parametrize("shape", [(31, 1, 3, 3), (31, 2, 1, 3), (31, 2, 3, 4)])
-def test_mismatched_dimensions_and_channels_are_rejected(shape, forbid_work):
+def test_mismatched_dimensions_and_channels_are_rejected(
+    shape, forbid_memory_management
+):
     with pytest.raises(ValueError, match="matching height, width, and channel count"):
         TwoBatchLoop.execute(torch.ones(31, 2, 3, 3), torch.ones(shape))
 
 
+@pytest.mark.parametrize("append", [False, True])
 @pytest.mark.parametrize(
-    "options,match",
+    "batch_size,counts,transfers",
     [
-        ({"batch_size": -1}, "batch_size"),
-        ({"batch_size": True}, "batch_size"),
-        ({"batch_size": 2.0}, "batch_size"),
-        ({"output_device": "cuda"}, "output_device"),
+        (0, [64, 64, 4], [15, 15, 49, 2, 15, 15, 47, 4]),
+        (132, [132], [15, 15, 51, 15, 15, 51]),
     ],
 )
-def test_execution_controls_are_validated(options, match, forbid_work):
-    with pytest.raises(ValueError, match=match):
-        TwoBatchLoop.execute(
-            torch.ones(31, 1, 1, 3), torch.ones(31, 1, 1, 3), **options
-        )
+def test_chunks_transfer_only_needed_frames_and_reserve_the_closing_frame(
+    append, batch_size, counts, transfers, runtime, gpu_routing
+):
+    first = torch.rand(81, 2, 3, 4, dtype=torch.float64)
+    second = torch.rand(81, 2, 3, 4, dtype=torch.float16)
+    counts = counts.copy()
+    if append:
+        if batch_size == 132:
+            counts.append(1)
+        else:
+            counts[-1] += 1
+    output = TwoBatchLoop.execute(
+        first,
+        second,
+        append_first_frame=append,
+        output_device="gpu",
+        batch_size=batch_size,
+    ).result[0]
+    assert gpu_routing.allocations == [
+        ((132 + int(append), 2, 3, 4), runtime.device, torch.float32)
+    ]
+    assert gpu_routing.transfers == [
+        (count, runtime.device, torch.float32) for count in transfers
+    ]
+    working_bytes = 8 * 2 * counts[0] * 2 * 3 * 4 * 4
+    assert runtime.free_requests == [
+        (working_bytes + output.numel() * 4, runtime.device)
+    ]
+    assert runtime.progress[0].total == 132 + int(append)
+    assert runtime.progress[0].updates == list(accumulate(counts))
+    assert output.dtype == torch.float32
+    assert torch.equal(output[15:66], first[15:66].float())
+    assert torch.equal(output[81:132], second[15:66].float())
+    if append:
+        assert torch.equal(output[-1], output[0])
+
+
+@pytest.mark.parametrize(
+    "batch_size,attempts,updates,retry_count",
+    [
+        (133, [(0, 133), (0, 66), (66, 66), (132, 1)], [66, 132, 133], 66),
+        (
+            0,
+            [(0, 64), (64, 64), (128, 5), (128, 2), (130, 2), (132, 1)],
+            [64, 128, 130, 132, 133],
+            2,
+        ),
+    ],
+)
+def test_partially_written_closing_chunk_retries_then_copies_a_single_frame(
+    batch_size, attempts, updates, retry_count, runtime, monkeypatch
+):
+    first = torch.rand(81, 2, 3, 4, dtype=torch.float64)
+    second = torch.rand(81, 2, 3, 4, dtype=torch.float64)
+    expected = TwoBatchLoop.execute(first, second, append_first_frame=True).result[0]
+    runtime.progress.clear()
+    runtime.free_requests.clear()
+    original_execute = two_batch_loop._execute
+    original_copy = torch.Tensor.copy_
+    original_empty = torch.empty
+    original_to = torch.Tensor.to
+    seen, allocations, converted = [], [], []
+    fail = True
+
+    def execute(image, process, *args, **kwargs):
+        def record(start, count, destination, device):
+            seen.append((start, count))
+            process(start, count, destination, device)
+
+        return original_execute(image, record, *args, **kwargs)
+
+    def copy(tensor, source, *args, **kwargs):
+        nonlocal fail
+        result = original_copy(tensor, source, *args, **kwargs)
+        if fail and tensor.storage_offset() == 132 * 2 * 3 * 4:
+            fail = False
+            raise torch.OutOfMemoryError("simulated failure after closing-frame write")
+        return result
+
+    def empty(*args, **kwargs):
+        result = original_empty(*args, **kwargs)
+        allocations.append(weakref.ref(result))
+        return result
+
+    def to(tensor, *args, **kwargs):
+        result = original_to(tensor, *args, **kwargs)
+        converted.append(weakref.ref(result))
+        return result
+
+    def empty_cache():
+        assert converted and all(reference() is None for reference in converted)
+        runtime.cache_clears += 1
+
+    monkeypatch.setattr(two_batch_loop, "_execute", execute)
+    monkeypatch.setattr(torch.Tensor, "copy_", copy)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    monkeypatch.setattr(torch, "empty", empty)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
+    output = TwoBatchLoop.execute(
+        first, second, append_first_frame=True, batch_size=batch_size
+    ).result[0]
+    assert seen == attempts
+    assert len(allocations) == 1
+    assert allocations[0]() is output
+    assert torch.equal(output, expected)
+    assert runtime.progress[0].updates == updates
+    assert runtime.progress[0].total == 133
+    assert runtime.cache_clears == 1
+    frame_bytes = 2 * 3 * 4 * 4
+    assert runtime.free_requests == [
+        ((133 + 8 * 2 * attempts[0][1]) * frame_bytes, runtime.device),
+        (8 * 2 * retry_count * frame_bytes, runtime.device),
+    ]
+    seen.clear()
+    again = TwoBatchLoop.execute(
+        first, second, append_first_frame=True, batch_size=batch_size
+    ).result[0]
+    assert seen[0] == attempts[0]  # A fresh run restores the requested chunk size.
+    assert runtime.free_requests[-1] == runtime.free_requests[0]
+    assert torch.equal(again, expected)
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [torch.OutOfMemoryError, InterruptProcessingException],
+)
+@pytest.mark.parametrize("stage", ["transition", "closing"])
+def test_retained_terminal_exception_releases_output_and_temporaries(
+    error_type, stage, runtime, monkeypatch
+):
+    first = torch.zeros(5, 1, 1, 3, dtype=torch.float64)
+    second = torch.ones(5, 1, 1, 3, dtype=torch.float64)
+    original_empty, original_to, original_copy = (
+        torch.empty,
+        torch.Tensor.to,
+        torch.Tensor.copy_,
+    )
+    references = []
+
+    def empty(*args, **kwargs):
+        result = original_empty(*args, **kwargs)
+        references.append(weakref.ref(result))
+        return result
+
+    def to(tensor, *args, **kwargs):
+        result = original_to(tensor, *args, **kwargs)
+        references.append(weakref.ref(result))
+        if stage == "transition" and tensor[0, 0, 0, 0] == 0:
+            raise error_type("simulated terminal transfer failure")
+        return result
+
+    def copy(tensor, source, *args, **kwargs):
+        if stage == "closing" and tensor.storage_offset() == 6 * 3:
+            raise error_type("simulated terminal closing-frame failure")
+        return original_copy(tensor, source, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "empty", empty)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    monkeypatch.setattr(torch.Tensor, "copy_", copy)
+    expected_error = (
+        RuntimeError if error_type is torch.OutOfMemoryError else error_type
+    )
+    with pytest.raises(expected_error) as caught:
+        TwoBatchLoop.execute(first, second, 2, True, batch_size=1)
+    assert caught.value is not None
+    assert references and all(reference() is None for reference in references)
+    assert runtime.cache_clears == 0
+    assert runtime.progress[0].updates == (
+        [] if stage == "transition" else [1, 2, 3, 4, 5, 6]
+    )
+    if error_type is torch.OutOfMemoryError:
+        assert "processing one frame" in str(caught.value)

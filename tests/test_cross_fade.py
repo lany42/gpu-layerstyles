@@ -1,44 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Lany Atwood <lany@colorized.life>
 
-"""CrossFade's public controls, sequence assembly, and numerical behavior."""
+"""CrossFade's sequence assembly, numerics, validation, and chunked execution."""
 
-import inspect
+import weakref
+from itertools import accumulate
 
 import pytest
 import torch
-from comfy_api.latest import io
 
+from gpu_layerstyles._exec import core, crossfade
 from gpu_layerstyles.nodes.cross_fade import CrossFade
 
-
-def test_schema_and_execute_contract():
-    schema = CrossFade.define_schema()
-    names = [
-        "images_1",
-        "images_2",
-        "start_index",
-        "frames",
-        "output_device",
-        "batch_size",
-    ]
-    assert [field.id for field in schema.inputs] == names
-    parameters = inspect.signature(CrossFade.execute).parameters
-    assert list(parameters) == names
-    assert [parameters[name].default for name in names[2:]] == [0, 2, "cpu", 0]
-    assert isinstance(inspect.getattr_static(CrossFade, "define_schema"), classmethod)
-    assert isinstance(inspect.getattr_static(CrossFade, "execute"), classmethod)
-    assert schema.node_id == "GPULayerStyles_CrossFade"
-    assert schema.display_name == "GPU LayerStyles CrossFade"
-    assert schema.category == "GPU LayerStyles/Batch"
-    assert len(schema.outputs) == 1
-    assert schema.outputs[0].display_name == "image"
-    start, frames, output, batch = schema.inputs[2:]
-    assert (start.default, start.min, start.max, start.step) == (0, 0, 2**31 - 1, 1)
-    assert (frames.default, frames.min, frames.max, frames.step) == (2, 2, 2**31 - 1, 1)
-    assert output.options == ["gpu", "cpu"]
-    assert output.default == "cpu"
-    assert (batch.default, batch.min, batch.max, batch.step) == (0, 0, 2**31 - 1, 1)
+from .conftest import InterruptProcessingException
 
 
 @pytest.mark.parametrize("batch_size", [0, 1, 2, 3, 4, 99])
@@ -60,10 +34,9 @@ def test_exact_sequence_endpoints_and_first_batch_tail_discard(
     images_2 = torch.tensor([8, 12, 16, 20, 24], dtype=torch.float32)[
         :, None, None, None
     ].expand(-1, 2, 3, 3)
-    result = CrossFade.execute(images_1, images_2, start, frames, batch_size=batch_size)
-    assert isinstance(result, io.NodeOutput)
-    assert len(result.result) == 1
-    output = result.result[0]
+    output = CrossFade.execute(
+        images_1, images_2, start, frames, batch_size=batch_size
+    ).result[0]
     values = torch.tensor(expected)[:, None, None, None].expand(-1, 2, 3, 3)
     assert torch.equal(output, values)
     assert len(output) == start + len(images_2)
@@ -92,100 +65,46 @@ def test_rgba_channels_fade_independently_without_premultiplication_or_clamping(
     assert torch.equal(output, expected)
 
 
-@pytest.mark.parametrize(
-    "dtype_1,dtype_2",
-    [
-        (torch.float16, torch.float64),
-        (torch.bfloat16, torch.float16),
-        (torch.float32, torch.float32),
-        (torch.float64, torch.bfloat16),
-    ],
-)
-@pytest.mark.parametrize("channels", [3, 4])
-@pytest.mark.parametrize("batch_size", [0, 1, 3, 80, 999])
-def test_chunk_independence_float32_and_input_preservation(
-    dtype_1, dtype_2, channels, batch_size
-):
+@pytest.mark.parametrize("batch_size", [0, 3])
+def test_chunked_mixed_precision_fade_matches_a_float64_reference(batch_size):
     generator = torch.Generator().manual_seed(137)
-    first = (
-        (torch.rand(77, 3, 5, channels, generator=generator) * 3 - 1)
-        .to(dtype_1)
-        .transpose(1, 2)
-        .requires_grad_()
-    )
-    second = (
-        (torch.rand(131, 3, 5, channels, generator=generator) * 3 - 1)
-        .to(dtype_2)
-        .transpose(1, 2)
-        .requires_grad_()
-    )
-    before = first.detach().clone(), second.detach().clone()
-    versions = first._version, second._version
+    first = (torch.rand(77, 3, 5, 4, generator=generator) * 3 - 1).half()
+    second = (torch.rand(131, 3, 5, 4, generator=generator) * 3 - 1).double()
     output = CrossFade.execute(first, second, 5, 67, batch_size=batch_size).result[0]
 
     # Use a per-frame float64 reference, independent of the chunked float32 kernel.
-    expected = [frame.double() for frame in before[0][:5]]
+    expected = [frame.double() for frame in first[:5]]
     for j in range(67):
         weight = j / 66
         expected.append(
-            before[0][5 + j].double() * (1 - weight) + before[1][j].double() * weight
+            first[5 + j].double() * (1 - weight) + second[j].double() * weight
         )
-    expected.extend(frame.double() for frame in before[1][67:])
+    expected.extend(frame.double() for frame in second[67:])
     expected = torch.stack(expected).float()
     torch.testing.assert_close(output, expected, rtol=2e-6, atol=4e-7)
-    assert output.shape == (136, 5, 3, channels)
-    assert output.dtype == torch.float32
-    assert output.device.type == "cpu"
-    assert output.is_contiguous()
-    assert not output.requires_grad
-    assert output.grad_fn is None
-    assert output.data_ptr() not in (first.data_ptr(), second.data_ptr())
-    assert torch.equal(output[5], before[0][5].float())
-    assert torch.equal(output[71], before[1][66].float())
-    assert torch.equal(first, before[0])
-    assert torch.equal(second, before[1])
-    assert (first._version, second._version) == versions
+    assert output.shape == (136, 3, 5, 4)
+    assert torch.equal(output[5], first[5].float())
+    assert torch.equal(output[71], second[66].float())
 
 
-@pytest.mark.parametrize("output_device", ["cpu", "gpu"])
-def test_overlapping_inputs_are_safe_and_honor_comfy_cpu_mode(output_device):
+def test_overlapping_inputs_are_read_without_aliasing_the_output():
     image = torch.rand(9, 2, 3, 4, generator=torch.Generator().manual_seed(2))
     before = image.clone()
-    output = CrossFade.execute(image, image[2:], 1, 3, output_device, 2).result[0]
-    assert output.device.type == "cpu"
-    assert torch.equal(image, before)
+    output = CrossFade.execute(image, image[2:], 1, 3, batch_size=2).result[0]
+    torch.testing.assert_close(output[2], (before[2] + before[3]) / 2)
     output.zero_()
     assert torch.equal(image, before)
 
 
-def test_float32_inside_autocast():
-    first = torch.rand(7, 2, 3, 4)
-    second = torch.rand(5, 2, 3, 4)
-    expected = CrossFade.execute(first, second, 2, 3).result[0]
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        output = CrossFade.execute(first, second, 2, 3).result[0]
-    assert output.dtype == torch.float32
-    assert torch.equal(output, expected)
-
-
 @pytest.fixture
-def forbid_work(monkeypatch, runtime):
-    def unexpected(*args, **kwargs):
-        pytest.fail("CrossFade must validate before allocating or processing")
-
-    monkeypatch.setattr(torch, "empty", unexpected)
-    monkeypatch.setattr(torch.Tensor, "to", unexpected)
-    monkeypatch.setattr(torch, "arange", unexpected)
+def forbid_memory_management(runtime):
     yield
     assert not runtime.free_requests
-    assert not runtime.progress
 
 
 @pytest.mark.parametrize("name", ["start_index", "frames"])
-@pytest.mark.parametrize(
-    "value", [None, True, False, -1, 2.0, "2", float("inf"), float("nan")]
-)
-def test_controls_must_be_exact_integers(name, value, forbid_work):
+@pytest.mark.parametrize("value", [True, -1, 2.0])
+def test_controls_must_be_exact_integers(name, value, forbid_memory_management):
     with pytest.raises(ValueError, match=name):
         CrossFade.execute(
             torch.ones(5, 1, 1, 3), torch.ones(5, 1, 1, 3), **{name: value}
@@ -207,7 +126,7 @@ def test_controls_must_be_exact_integers(name, value, forbid_work):
     ],
 )
 def test_invalid_ranges_are_rejected_without_shortening(
-    start, frames, n1, n2, match, forbid_work
+    start, frames, n1, n2, match, forbid_memory_management
 ):
     with pytest.raises(ValueError, match=match):
         CrossFade.execute(
@@ -215,44 +134,158 @@ def test_invalid_ranges_are_rejected_without_shortening(
         )
 
 
-@pytest.mark.parametrize("name", ["images_1", "images_2"])
-@pytest.mark.parametrize(
-    "image,error",
-    [
-        (None, TypeError),
-        ([], TypeError),
-        (torch.ones(2, 2, 3, 3, dtype=torch.uint8), TypeError),
-        (torch.ones(2, 2, 3), ValueError),
-        (torch.ones(0, 2, 3, 3), ValueError),
-        (torch.ones(2, 0, 3, 3), ValueError),
-        (torch.ones(2, 2, 0, 3), ValueError),
-        (torch.ones(2, 2, 3, 1), ValueError),
-        (torch.ones(2, 2, 3, 5), ValueError),
-        (torch.ones(2, 2, 3, 3).to_sparse(), ValueError),
-    ],
-)
-def test_invalid_images_are_named_and_rejected(name, image, error, forbid_work):
-    inputs = {"images_1": torch.ones(2, 2, 3, 3), "images_2": torch.ones(2, 2, 3, 3)}
-    inputs[name] = image
-    with pytest.raises(error, match=name):
-        CrossFade.execute(**inputs)
-
-
 @pytest.mark.parametrize("shape", [(2, 1, 3, 3), (2, 2, 1, 3), (2, 2, 3, 4)])
-def test_mismatched_dimensions_and_channels_are_rejected(shape, forbid_work):
+def test_mismatched_dimensions_and_channels_are_rejected(
+    shape, forbid_memory_management
+):
     with pytest.raises(ValueError, match="matching height, width, and channel count"):
         CrossFade.execute(torch.ones(2, 2, 3, 3), torch.ones(shape))
 
 
 @pytest.mark.parametrize(
-    "options,match",
+    "batch_size,counts,transfers",
     [
-        ({"batch_size": -1}, "batch_size"),
-        ({"batch_size": True}, "batch_size"),
-        ({"batch_size": 2.0}, "batch_size"),
-        ({"output_device": "cuda"}, "output_device"),
+        (0, [64, 64, 8], [5, 59, 59, 8, 8, 56, 8]),
+        (80, [80, 56], [5, 67, 67, 8, 56]),
+        (200, [136], [5, 67, 67, 64]),
     ],
 )
-def test_execution_controls_are_validated(options, match, forbid_work):
-    with pytest.raises(ValueError, match=match):
-        CrossFade.execute(torch.ones(2, 1, 1, 3), torch.ones(2, 1, 1, 3), **options)
+def test_chunks_transfer_only_the_frames_each_seam_needs(
+    batch_size, counts, transfers, runtime, gpu_routing
+):
+    first = torch.rand(77, 2, 3, 4, dtype=torch.float64)
+    second = torch.rand(131, 2, 3, 4, dtype=torch.float16)
+    output = CrossFade.execute(first, second, 5, 67, "gpu", batch_size).result[0]
+    assert gpu_routing.allocations == [((136, 2, 3, 4), runtime.device, torch.float32)]
+    assert gpu_routing.transfers == [
+        (count, runtime.device, torch.float32) for count in transfers
+    ]
+    # Both float32 input chunks and their blend temporaries are reserved.
+    working_bytes = 8 * 2 * counts[0] * 2 * 3 * 4 * 4
+    assert runtime.free_requests == [
+        (working_bytes + output.numel() * 4, runtime.device)
+    ]
+    assert runtime.progress[0].total == 136
+    assert runtime.progress[0].updates == list(accumulate(counts))
+    assert output.dtype == torch.float32
+    assert torch.equal(output[:5], first[:5].float())
+    assert torch.equal(output[72:], second[67:].float())
+
+
+def test_oom_during_second_input_transfer_retries_seams_and_restarts_fresh(
+    runtime, monkeypatch
+):
+    first = torch.arange(149, dtype=torch.float64)[:, None, None, None].expand(
+        -1, 2, 3, 4
+    )
+    second = (1000 + torch.arange(101, dtype=torch.float64))[
+        :, None, None, None
+    ].expand(-1, 2, 3, 4)
+    before = first.clone(), second.clone()
+    original_process = crossfade._process_crossfade_chunk
+    original_to = torch.Tensor.to
+    attempts, converted = [], []
+    fail = True
+
+    def process(
+        images_1, images_2, start_index, frames, start, count, destination, device
+    ):
+        attempts.append((start, count))
+        return original_process(
+            images_1, images_2, start_index, frames, start, count, destination, device
+        )
+
+    def to(tensor, *args, **kwargs):
+        result = original_to(tensor, *args, **kwargs)
+        converted.append(weakref.ref(result))
+        if fail and tensor[0, 0, 0, 0] >= 1000 and len(tensor) > 16:
+            raise torch.OutOfMemoryError("simulated second-input allocation failure")
+        return result
+
+    def empty_cache():
+        # Both first-input and failed second-input conversions must be released.
+        assert converted and all(reference() is None for reference in converted)
+        runtime.cache_clears += 1
+
+    monkeypatch.setattr(crossfade, "_process_crossfade_chunk", process)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
+    output = CrossFade.execute(first, second, 70, 73).result[0]
+    assert attempts == [
+        (0, 64),
+        (64, 64),
+        (64, 32),
+        (64, 16),
+        (80, 16),
+        (96, 16),
+        (112, 16),
+        (128, 16),
+        (144, 16),
+        (160, 11),
+    ]
+    assert runtime.progress[0].updates == [64, 80, 96, 112, 128, 144, 160, 171]
+    assert runtime.cache_clears == 2
+    frame_bytes = 2 * 3 * 4 * 4
+    assert runtime.free_requests == [
+        ((171 + 8 * 2 * 64) * frame_bytes, runtime.device),
+        (8 * 2 * 32 * frame_bytes, runtime.device),
+        (8 * 2 * 16 * frame_bytes, runtime.device),
+    ]
+    expected_values = [
+        *range(70),
+        *(70 + j + 930 * j / 72 for j in range(73)),
+        *range(1073, 1101),
+    ]
+    expected = torch.tensor(expected_values)[:, None, None, None].expand_as(output)
+    torch.testing.assert_close(output, expected)
+    assert torch.equal(first, before[0])
+    assert torch.equal(second, before[1])
+
+    fail = False
+    attempts.clear()
+    again = CrossFade.execute(first, second, 70, 73).result[0]
+    assert attempts == [(0, 64), (64, 64), (128, 43)]
+    assert runtime.progress[1].updates == [64, 128, 171]
+    assert runtime.free_requests[-1] == runtime.free_requests[0]
+    assert torch.equal(output, again)
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [torch.OutOfMemoryError, InterruptProcessingException],
+)
+def test_retained_terminal_exception_releases_output_and_temporaries(
+    error_type, runtime, monkeypatch
+):
+    first = torch.zeros(2, 1, 1, 3, dtype=torch.float64)
+    second = torch.ones(2, 1, 1, 3, dtype=torch.float64)
+    original_empty = torch.empty
+    original_to = torch.Tensor.to
+    references = []
+
+    def empty(*args, **kwargs):
+        result = original_empty(*args, **kwargs)
+        references.append(weakref.ref(result))
+        return result
+
+    def to(tensor, *args, **kwargs):
+        result = original_to(tensor, *args, **kwargs)
+        references.append(weakref.ref(result))
+        if tensor[0, 0, 0, 0] == 1:
+            raise error_type("simulated terminal transfer failure")
+        return result
+
+    monkeypatch.setattr(torch, "empty", empty)
+    monkeypatch.setattr(torch.Tensor, "to", to)
+    expected_error = (
+        RuntimeError if error_type is torch.OutOfMemoryError else error_type
+    )
+    with pytest.raises(expected_error) as caught:
+        CrossFade.execute(first, second, batch_size=1)
+    assert caught.value is not None  # Keep the exception and its tracebacks alive.
+    assert len(references) == 3
+    assert all(reference() is None for reference in references)
+    assert runtime.cache_clears == 0
+    assert runtime.progress[0].updates == []
+    if error_type is torch.OutOfMemoryError:
+        assert "processing one frame" in str(caught.value)

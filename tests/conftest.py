@@ -13,6 +13,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
+# Tiny test tensors run faster without intra-op thread start-up.
+torch.set_num_threads(1)
+
 
 @dataclass
 class ImageInput:
@@ -47,6 +50,14 @@ class NumberInput:
     max: float | int
     step: float | int
     tooltip: str | None = None
+
+
+class IntInput(NumberInput):
+    pass
+
+
+class FloatInput(NumberInput):
+    pass
 
 
 @dataclass
@@ -112,8 +123,8 @@ latest.io = SimpleNamespace(
     Schema=Schema,
     Image=SimpleNamespace(Input=ImageInput, Output=ImageOutput),
     Autogrow=SimpleNamespace(Input=AutogrowInput, TemplateNames=AutogrowTemplateNames),
-    Float=SimpleNamespace(Input=NumberInput),
-    Int=SimpleNamespace(Input=NumberInput),
+    Float=SimpleNamespace(Input=FloatInput),
+    Int=SimpleNamespace(Input=IntInput),
     Boolean=SimpleNamespace(Input=BooleanInput),
     Combo=SimpleNamespace(Input=ComboInput),
     String=SimpleNamespace(Input=StringInput),
@@ -204,7 +215,8 @@ def gpu_routing(runtime, monkeypatch):
     original_to = torch.Tensor.to
 
     def empty(shape, *, device, dtype):
-        assert runtime.free_requests
+        # Each run asks ComfyUI to free memory before allocating its output.
+        assert len(runtime.free_requests) > len(state.allocations)
         state.allocations.append((tuple(shape), device, dtype))
         return original_empty(shape, dtype=dtype, device="cpu")
 

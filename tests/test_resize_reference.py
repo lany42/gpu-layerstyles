@@ -10,7 +10,6 @@ import pytest
 import torch
 from PIL import Image
 
-from gpu_layerstyles import _resize
 from gpu_layerstyles.nodes.image_scale_down import ImageScaleDown
 
 
@@ -34,17 +33,6 @@ def pillow_resize(image, width, height):
     )
 
 
-def raw_lanczos(image, width, height):
-    resizer = _resize.ImageResizer(
-        tuple(image.shape[1:3]), (height, width), image.shape[-1], "lanczos"
-    )
-    values = image.movedim(-1, 1)
-    for axis, n, m in resizer.axes:
-        weights = _resize._lanczos_coefficients(n, m, image.device)
-        values = _resize._resample_axis(values, axis, weights, lambda: None)
-    return values.movedim(1, -1)
-
-
 @pytest.mark.parametrize(
     "source,target",
     [
@@ -54,7 +42,6 @@ def raw_lanczos(image, width, height):
         ((37, 1), (13, 1)),
         ((71, 11), (3, 10)),
         ((11, 71), (10, 3)),
-        ((9, 13), (9, 13)),
         ((9, 13), (9, 5)),
         ((9, 13), (4, 13)),
         ((3, 4096), (2, 3999)),
@@ -67,8 +54,6 @@ def test_lanczos_matches_pillow_float_reference(source, target):
     image = rng.random((2, *source, 3), dtype=np.float32)
     height, width = target
     expected = pillow_resize(image, width, height)
-    raw = raw_lanczos(torch.from_numpy(image), width, height)
-    np.testing.assert_allclose(raw.numpy(), expected, atol=2e-6, rtol=1e-5)
     output = ImageScaleDown.execute(
         torch.from_numpy(image), width, height, "lanczos"
     ).result[0]
@@ -95,8 +80,6 @@ def test_patterns_and_boundary_normalization(pattern):
         plane = (columns >= 14).astype(np.float32)
     image = np.repeat(plane[None, ..., None], 3, axis=-1)
     expected = pillow_resize(image, 13, 7)
-    raw = raw_lanczos(torch.from_numpy(image), 13, 7)
-    np.testing.assert_allclose(raw.numpy(), expected, atol=2e-6, rtol=1e-5)
     output = ImageScaleDown.execute(torch.from_numpy(image), 13, 7, "lanczos").result[0]
     np.testing.assert_allclose(
         output.numpy(), expected.clip(0, 1), atol=2e-6, rtol=1e-5

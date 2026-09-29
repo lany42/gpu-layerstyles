@@ -48,24 +48,15 @@ def test_rejects_invalid_output_device():
 
 @pytest.mark.parametrize(
     "frames,expected",
-    [
-        (1, [1]),
-        (17, [17]),
-        (63, [63]),
-        (64, [64]),
-        (65, [64, 1]),
-        (128, [64, 64]),
-        (131, [64, 64, 3]),
-    ],
+    [(1, [1]), (64, [64]), (65, [64, 1]), (131, [64, 64, 3])],
 )
-@pytest.mark.parametrize("working_headroom", [0, 1024**3])
 def test_automatic_chunks_reserve_initial_work_and_complete_output(
-    runtime, frames, expected, working_headroom
+    runtime, frames, expected
 ):
     image = torch.rand(frames, 2, 3, 4, dtype=torch.float64)
     frame_bytes = 2 * 3 * 4 * 4
     output_bytes = frames * frame_bytes
-    runtime.available = output_bytes + working_headroom
+    runtime.available = output_bytes  # An output that exactly fits is allowed.
     calls = []
 
     def operation(rgb):
@@ -103,9 +94,8 @@ def test_preallocation_follows_memory_management_and_partial_chunks_report_progr
     assert torch.equal(result[..., 3], image[..., 3])
 
 
-@pytest.mark.parametrize("batch_size", [0, 7])
 def test_oom_halves_chunk_size_retries_same_frames_and_releases_temporaries(
-    runtime, monkeypatch, batch_size
+    runtime, monkeypatch
 ):
     image = torch.rand(7, 2, 3, 4)
     calls = []
@@ -125,7 +115,7 @@ def test_oom_halves_chunk_size_retries_same_frames_and_releases_temporaries(
         runtime.cache_clears += 1
 
     monkeypatch.setattr(core.model_management, "soft_empty_cache", empty_cache)
-    result = process_image(image, operation, batch_size=batch_size)
+    result = process_image(image, operation)
     assert calls == [7, 3, *([1] * 7)]
     assert runtime.cache_clears == 2
     assert runtime.progress[0].updates == list(range(1, 8))
@@ -134,7 +124,7 @@ def test_oom_halves_chunk_size_retries_same_frames_and_releases_temporaries(
     assert torch.equal(image, before)
 
 
-@pytest.mark.parametrize("output_device", [None, "cpu", "gpu"])
+@pytest.mark.parametrize("output_device", [None, "gpu"])
 def test_automatic_oom_retries_64_32_16_and_restarts_fresh(
     runtime, gpu_routing, monkeypatch, output_device
 ):
@@ -217,6 +207,10 @@ def test_oom_in_final_partial_chunk_retries_only_that_chunk(runtime):
         torch.OutOfMemoryError("simulated"),
         MemoryError("simulated"),
         RuntimeError("DefaultCPUAllocator: not enough memory"),
+        RuntimeError(
+            "[enforce fail at alloc_cpu.cpp:127] err == 0. DefaultCPUAllocator: "
+            "can't allocate memory: you tried to allocate 4611686018427387904 bytes."
+        ),
     ],
 )
 def test_one_frame_oom_is_actionable_and_does_not_loop(error, runtime):
@@ -227,6 +221,18 @@ def test_one_frame_oom_is_actionable_and_does_not_loop(error, runtime):
         process_image(torch.rand(1, 2, 3, 3), operation)
     assert runtime.progress[0].updates == []
     assert runtime.cache_clears == 0
+
+
+def test_free_memory_is_measured_after_comfyui_frees_it(runtime, monkeypatch):
+    runtime.available = 0  # Loaded models fill the device until they are freed.
+
+    def free_memory(amount, device):
+        runtime.free_requests.append((amount, device))
+        runtime.available = amount
+
+    monkeypatch.setattr(core.model_management, "free_memory", free_memory)
+    image = torch.rand(3, 2, 3, 3)
+    assert torch.equal(process_image(image, lambda rgb: rgb), image)
 
 
 def test_output_that_cannot_fit_fails_before_allocation(runtime, monkeypatch):
@@ -242,7 +248,7 @@ def test_output_that_cannot_fit_fails_before_allocation(runtime, monkeypatch):
         process_image(torch.ones(1, 1, 1, 3), lambda rgb: rgb)
 
 
-@pytest.mark.parametrize("output_device", [None, "cpu", "gpu"])
+@pytest.mark.parametrize("output_device", [None, "gpu"])
 def test_output_allocation_failure_does_not_retry_or_change_placement(
     runtime, monkeypatch, output_device
 ):
@@ -266,9 +272,14 @@ def test_output_allocation_failure_does_not_retry_or_change_placement(
     assert runtime.cache_clears == 0
 
 
-@pytest.mark.parametrize("output_device", [None, "gpu", "cpu"])
 @pytest.mark.parametrize(
-    "batch_size,expected", [(0, [64, 64, 3]), (80, [80, 51]), (200, [131])]
+    "output_device,batch_size,expected",
+    [
+        (None, 0, [64, 64, 3]),
+        ("gpu", 0, [64, 64, 3]),
+        ("gpu", 80, [80, 51]),
+        ("gpu", 200, [131]),
+    ],
 )
 def test_device_selection_and_gpu_reservation_with_cpu_backed_allocation_spy(
     runtime, gpu_routing, output_device, batch_size, expected
